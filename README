@@ -1,0 +1,7 @@
+GHC Performance and Test Logs
+-----------------------------
+
+This repository contains various logs related to testing the performance and
+stability of GHC. Particuarly it focuses on the LLVM backend for GHC.
+
+Logs include, nofib and the GHC testsuite.
