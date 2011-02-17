@@ -1,0 +1,619 @@
+LLVM Opt Optimisation Passes
+----------------------------
+
+To get a list of the optimisation passes opt uses at a level:
+
+ $ llvm-as < /dev/null | opt -O1 -disable-output -debug-pass=Arguments
+
+Group Flags:
+
+ -O1, -O2, -O3, -std-compile-opts
+
+Individual Flags:
+
+  -O1                                          - Optimization level 1. Similar to llvm-gcc -O1
+  -O2                                          - Optimization level 2. Similar to llvm-gcc -O2
+  -O3                                          - Optimization level 3. Similar to llvm-gcc -O3
+  -S                                           - Write output as LLVM assembly
+  -analyze                                     - Only perform analysis, no optimization
+  -asm-verbose                                 - Add comments to directives.
+  -code-model                                  - Choose code model
+    =default                                   -   Target default code model
+    =small                                     -   Small code model
+    =kernel                                    -   Kernel code model
+    =medium                                    -   Medium code model
+    =large                                     -   Large code model
+  -cppfname=<function name>                    - Specify the name of the generated function
+  -cppfor=<string>                             - Specify the name of the thing to generate
+  -cppgen                                      - Choose what kind of output to generate
+    =program                                   -   Generate a complete program
+    =module                                    -   Generate a module definition
+    =contents                                  -   Generate contents of a module
+    =function                                  -   Generate a function definition
+    =functions                                 -   Generate all function definitions
+    =inline                                    -   Generate an inline function
+    =variable                                  -   Generate a variable definition
+    =type                                      -   Generate a type definition
+  -default-data-layout=<layout-string>         - data layout string to use if not specified by module
+  -disable-excess-fp-precision                 - Disable optimizations that may increase FP precision
+  -disable-fp-elim                             - Disable frame pointer elimination optimization
+  -disable-inlining                            - Do not run the inliner pass
+  -disable-internalize                         - Do not mark all symbols as internal
+  -disable-non-leaf-fp-elim                    - Disable frame pointer elimination optimization for non-leaf funcs
+  -disable-opt                                 - Do not run any optimization passes
+  -disable-simplify-libcalls                   - Disable simplify-libcalls
+  -disable-spill-fusing                        - Disable fusing of spill code into instructions
+  -enable-correct-eh-support                   - Make the -lowerinvoke pass insert expensive, but correct, EH code
+  -enable-fp-mad                               - Enable less precise MAD instructions to be generated
+  -enable-full-load-pre                        - 
+  -enable-load-pre                             - 
+  -enable-no-infs-fp-math                      - Enable FP math optimizations that assume no +-Infs
+  -enable-no-nans-fp-math                      - Enable FP math optimizations that assume no NaNs
+  -enable-unsafe-fp-math                       - Enable optimizations that may decrease FP precision
+  -f                                           - Enable binary output on terminals
+  -fdata-sections                              - Emit data into separate sections
+  -ffunction-sections                          - Emit functions into separate sections
+  -float-abi                                   - Choose float ABI type
+    =default                                   -   Target default float ABI type
+    =soft                                      -   Soft float ABI (implied by -soft-float)
+    =hard                                      -   Hard float ABI (uses FP registers)
+  -funit-at-a-time                             - Enable IPO. This is same as llvm-gcc's -funit-at-a-time
+  -help                                        - Display available options (-help-hidden for more)
+  -internalize-public-api-file=<filename>      - A file containing list of symbol names to preserve
+  -internalize-public-api-list=<list>          - A list of symbol names to preserve
+  -jit-emit-debug                              - Emit debug information to debugger
+  -jit-enable-eh                               - Emit exception handling information
+  -join-liveintervals                          - Coalesce copies (default=true)
+  -limit-float-precision=<uint>                - Generate low-precision inline sequences for some float libcalls
+  -load=<pluginfilename>                       - Load the specified plugin
+  Optimizations available:
+    -aa-eval                                   - Exhaustive Alias Analysis Precision Evaluator
+    -adce                                      - Aggressive Dead Code Elimination
+    -always-inline                             - Inliner for always_inline functions
+    -argpromotion                              - Promote 'by reference' arguments to scalars
+    -basicaa                                   - Basic Alias Analysis (default AA impl)
+    -basiccg                                   - Basic CallGraph Construction
+    -block-placement                           - Profile Guided Basic Block Placement
+    -break-crit-edges                          - Break critical edges in CFG
+    -calcspillweights                          - Calculate spill weights
+    -codegenprepare                            - Optimize for code generation
+    -collector-metadata                        - Create Garbage Collector Module Metadata
+    -constmerge                                - Merge Duplicate Global Constants
+    -constprop                                 - Simple constant propagation
+    -correlated-propagation                    - Value Propagation
+    -count-aa                                  - Count Alias Analysis Query Responses
+    -dce                                       - Dead Code Elimination
+    -dead-mi-elimination                       - Remove dead machine instructions
+    -deadargelim                               - Dead Argument Elimination
+    -deadarghaX0r                              - Dead Argument Hacking (BUGPOINT USE ONLY; DO NOT USE)
+    -deadtypeelim                              - Dead Type Elimination
+    -debug-aa                                  - AA use debugger
+    -die                                       - Dead Instruction Elimination
+    -domfrontier                               - Dominance Frontier Construction
+    -domtree                                   - Dominator Tree Construction
+    -dot-callgraph                             - Print Call Graph to 'dot' file
+    -dot-cfg                                   - Print CFG of function to 'dot' file
+    -dot-cfg-only                              - Print CFG of function to 'dot' file (with no function bodies)
+    -dot-dom                                   - Print dominance tree of function to 'dot' file
+    -dot-dom-only                              - Print dominance tree of function to 'dot' file (with no function bodies)
+    -dot-postdom                               - Print postdominance tree of function to 'dot' file
+    -dot-postdom-only                          - Print postdominance tree of function to 'dot' file (with no function bodies)
+    -dot-regions                               - Print regions of function to 'dot' file
+    -dot-regions-only                          - Print regions of function to 'dot' file (with no function bodies)
+    -dse                                       - Dead Store Elimination
+    -extract-blocks                            - Extract Basic Blocks From Module (for bugpoint use)
+    -functionattrs                             - Deduce function attributes
+    -globaldce                                 - Dead Global Elimination
+    -globalopt                                 - Global Variable Optimizer
+    -globalsmodref-aa                          - Simple mod/ref analysis for globals
+    -gvn                                       - Global Value Numbering
+    -if-converter                              - If Converter
+    -indvars                                   - Canonicalize Induction Variables
+    -inline                                    - Function Integration/Inlining
+    -insert-edge-profiling                     - Insert instrumentation for edge profiling
+    -insert-optimal-edge-profiling             - Insert optimal instrumentation for edge profiling
+    -instcombine                               - Combine redundant instructions
+    -instcount                                 - Counts the various types of Instructions
+    -instnamer                                 - Assign names to anonymous instructions
+    -internalize                               - Internalize Global Symbols
+    -intervals                                 - Interval Partition Construction
+    -ipconstprop                               - Interprocedural constant propagation
+    -ipsccp                                    - Interprocedural Sparse Conditional Constant Propagation
+    -iv-users                                  - Induction Variable Users
+    -jump-threading                            - Jump Threading
+    -lazy-value-info                           - Lazy Value Information Analysis
+    -lcssa                                     - Loop-Closed SSA Form Pass
+    -lda                                       - Loop Dependence Analysis
+    -libcall-aa                                - LibCall Alias Analysis
+    -licm                                      - Loop Invariant Code Motion
+    -linearscan-regalloc                       - Linear Scan Register Allocator
+    -lint                                      - Statically lint-checks LLVM IR
+    -live-values                               - Value Liveness Analysis
+    -liveintervals                             - Live Interval Analysis
+    -livestacks                                - Live Stack Slot Analysis
+    -livevars                                  - Live Variable Analysis
+    -loop-deletion                             - Delete dead loops
+    -loop-extract                              - Extract loops into new functions
+    -loop-extract-single                       - Extract at most one loop into a new function
+    -loop-index-split                          - Index Split Loops
+    -loop-reduce                               - Loop Strength Reduction
+    -loop-rotate                               - Rotate Loops
+    -loop-splitting                            - Split virtual regists across loop boundaries.
+    -loop-unroll                               - Unroll loops
+    -loop-unswitch                             - Unswitch loops
+    -loops                                     - Natural Loop Information
+    -loopsimplify                              - Canonicalize natural loops
+    -loweratomic                               - Lower atomic intrinsics to non-atomic form
+    -lowerinvoke                               - Lower invoke and unwind, for unwindless code generators
+    -lowersetjmp                               - Lower Set Jump
+    -lowerswitch                               - Lower SwitchInst's to branches
+    -machine-cse                               - Machine Common Subexpression Elimination
+    -machine-loops                             - Machine Natural Loop Construction
+    -machine-sink                              - Machine code sinking
+    -machinedomtree                            - MachineDominator Tree Construction
+    -machinelicm                               - Machine Loop Invariant Code Motion
+    -machinemoduleinfo                         - Machine Module Information
+    -machineverifier                           - Verify generated machine code
+    -mem2reg                                   - Promote Memory to Register
+    -memcpyopt                                 - MemCpy Optimization
+    -memdep                                    - Memory Dependence Analysis
+    -mergefunc                                 - Merge Functions
+    -mergereturn                               - Unify function exit nodes
+    -module-debuginfo                          - Decodes module-level debug info
+    -no-aa                                     - No Alias Analysis (always returns 'may' alias)
+    -no-profile                                - No Profile Information
+    -opt-phis                                  - Optimize machine instruction PHIs
+    -partial-inliner                           - Partial Inliner
+    -partialspecialization                     - Partial Specialization
+    -peephole-opts                             - Peephole Optimizations
+    -phi-node-elimination                      - Eliminate PHI nodes for register allocation
+    -pointertracking                           - Track pointer bounds
+    -postdomfrontier                           - Post-Dominance Frontier Construction
+    -postdomtree                               - Post-Dominator Tree Construction
+    -pre-alloc-splitting                       - Pre-Register Allocation Live Interval Splitting
+    -preverify                                 - Preliminary module verification
+    -print-alias-sets                          - Alias Set Printer
+    -print-callgraph                           - Print a call graph
+    -print-callgraph-sccs                      - Print SCCs of the Call Graph
+    -print-cfg-sccs                            - Print SCCs of each function CFG
+    -print-dbginfo                             - Print debug info in human readable form
+    -print-dom-info                            - Dominator Info Printer
+    -print-externalfnconstants                 - Print external fn callsites passed constants
+    -print-function                            - Print function to stderr
+    -print-module                              - Print module to stderr
+    -print-used-types                          - Find Used Types
+    -processimpdefs                            - Process Implicit Definitions.
+    -profile-estimator                         - Estimate profiling information
+    -profile-loader                            - Load profile information from llvmprof.out
+    -profile-verifier                          - Verify profiling information
+    -prologepilog                              - Prologue/Epilogue Insertion
+    -prune-eh                                  - Remove unused exception handling info
+    -reassociate                               - Reassociate expressions
+    -reg2mem                                   - Demote all values to stack slots
+    -regions                                   - Detect single entry single exit regions
+    -rendermf                                  - Render machine functions (and related info) to HTML pages
+    -scalar-evolution                          - Scalar Evolution Analysis
+    -scalarrepl                                - Scalar Replacement of Aggregates
+    -sccp                                      - Sparse Conditional Constant Propagation
+    -scev-aa                                   - ScalarEvolution-based Alias Analysis
+    -simple-register-coalescing                - Simple Register Coalescing
+    -simplify-libcalls                         - Simplify well-known library calls
+    -simplify-libcalls-halfpowr                - Simplify half_powr library calls
+    -simplifycfg                               - Simplify the CFG
+    -sink                                      - Code sinking
+    -slotindexes                               - Slot index numbering
+    -split-geps                                - split complex GEPs into simple GEPs
+    -sretpromotion                             - Promote sret arguments to multiple ret values
+    -stack-protector                           - Insert stack protectors
+    -stack-slot-coloring                       - Stack Slot Coloring
+    -strip                                     - Strip all symbols from a module
+    -strip-dead-debug-info                     - Strip debug info for unused symbols
+    -strip-dead-prototypes                     - Strip Unused Function Prototypes
+    -strip-debug-declare                       - Strip all llvm.dbg.declare intrinsics
+    -strip-nondebug                            - Strip all symbols, except dbg symbols, from a module
+    -strong-phi-node-elimination               - Eliminate PHI nodes for register allocation, intelligently
+    -tailcallelim                              - Tail Call Elimination
+    -tailduplicate                             - Tail Duplication
+    -targetdata                                - Target Data Layout
+    -tbaa                                      - Type-Based Alias Analysis
+    -twoaddressinstruction                     - Two-Address instruction pass
+    -unreachable-mbb-elimination               - Remove unreachable machine basic blocks
+    -unreachableblockelim                      - Remove unreachable blocks from the CFG
+    -verify                                    - Module Verifier
+    -view-cfg                                  - View CFG of function
+    -view-cfg-only                             - View CFG of function (with no function bodies)
+    -view-dom                                  - View dominance tree of function
+    -view-dom-only                             - View dominance tree of function (with no function bodies)
+    -view-postdom                              - View postdominance tree of function
+    -view-postdom-only                         - View postdominance tree of function (with no function bodies)
+    -view-regions                              - View regions of function
+    -view-regions-only                         - View regions of function (with no function bodies)
+    -virtregmap                                - Virtual Register Map
+  -msp430-hwmult-mode                          - Hardware multiplier use mode
+    =no                                        -   Do not use hardware multiplier
+    =interrupts                                -   Assume hardware multiplier can be used inside interrupts
+    =use                                       -   Assume hardware multiplier cannot be used inside interrupts
+  -nozero-initialized-in-bss                   - Don't place zero-initialized symbols into bss section
+  -o=<filename>                                - Override output filename
+  -p                                           - Print module after each transformation
+  -pre-RA-sched                                - Instruction schedulers available (before register allocation):
+    =default                                   -   Best scheduler for the target
+    =list-burr                                 -   Bottom-up register reduction list scheduling
+    =list-tdrr                                 -   Top-down register reduction list scheduling
+    =source                                    -   Similar to list-burr but schedules in source order when possible
+    =list-hybrid                               -   Bottom-up register pressure aware list scheduling which tries to balance latency and register pressure
+    =list-ilp                                  -   Bottom-up register pressure aware list scheduling which tries to balance ILP and register pressure
+    =list-td                                   -   Top-down list scheduler
+    =fast                                      -   Fast suboptimal list scheduling
+  -print-after                                 - Print IR after specified passes
+    =aa-eval                                   -   Exhaustive Alias Analysis Precision Evaluator
+    =adce                                      -   Aggressive Dead Code Elimination
+    =always-inline                             -   Inliner for always_inline functions
+    =argpromotion                              -   Promote 'by reference' arguments to scalars
+    =basicaa                                   -   Basic Alias Analysis (default AA impl)
+    =basiccg                                   -   Basic CallGraph Construction
+    =block-placement                           -   Profile Guided Basic Block Placement
+    =break-crit-edges                          -   Break critical edges in CFG
+    =calcspillweights                          -   Calculate spill weights
+    =codegenprepare                            -   Optimize for code generation
+    =collector-metadata                        -   Create Garbage Collector Module Metadata
+    =constmerge                                -   Merge Duplicate Global Constants
+    =constprop                                 -   Simple constant propagation
+    =correlated-propagation                    -   Value Propagation
+    =count-aa                                  -   Count Alias Analysis Query Responses
+    =dce                                       -   Dead Code Elimination
+    =dead-mi-elimination                       -   Remove dead machine instructions
+    =deadargelim                               -   Dead Argument Elimination
+    =deadarghaX0r                              -   Dead Argument Hacking (BUGPOINT USE ONLY; DO NOT USE)
+    =deadtypeelim                              -   Dead Type Elimination
+    =debug-aa                                  -   AA use debugger
+    =die                                       -   Dead Instruction Elimination
+    =domfrontier                               -   Dominance Frontier Construction
+    =domtree                                   -   Dominator Tree Construction
+    =dot-callgraph                             -   Print Call Graph to 'dot' file
+    =dot-cfg                                   -   Print CFG of function to 'dot' file
+    =dot-cfg-only                              -   Print CFG of function to 'dot' file (with no function bodies)
+    =dot-dom                                   -   Print dominance tree of function to 'dot' file
+    =dot-dom-only                              -   Print dominance tree of function to 'dot' file (with no function bodies)
+    =dot-postdom                               -   Print postdominance tree of function to 'dot' file
+    =dot-postdom-only                          -   Print postdominance tree of function to 'dot' file (with no function bodies)
+    =dot-regions                               -   Print regions of function to 'dot' file
+    =dot-regions-only                          -   Print regions of function to 'dot' file (with no function bodies)
+    =dse                                       -   Dead Store Elimination
+    =extract-blocks                            -   Extract Basic Blocks From Module (for bugpoint use)
+    =functionattrs                             -   Deduce function attributes
+    =globaldce                                 -   Dead Global Elimination
+    =globalopt                                 -   Global Variable Optimizer
+    =globalsmodref-aa                          -   Simple mod/ref analysis for globals
+    =gvn                                       -   Global Value Numbering
+    =if-converter                              -   If Converter
+    =indvars                                   -   Canonicalize Induction Variables
+    =inline                                    -   Function Integration/Inlining
+    =insert-edge-profiling                     -   Insert instrumentation for edge profiling
+    =insert-optimal-edge-profiling             -   Insert optimal instrumentation for edge profiling
+    =instcombine                               -   Combine redundant instructions
+    =instcount                                 -   Counts the various types of Instructions
+    =instnamer                                 -   Assign names to anonymous instructions
+    =internalize                               -   Internalize Global Symbols
+    =intervals                                 -   Interval Partition Construction
+    =ipconstprop                               -   Interprocedural constant propagation
+    =ipsccp                                    -   Interprocedural Sparse Conditional Constant Propagation
+    =iv-users                                  -   Induction Variable Users
+    =jump-threading                            -   Jump Threading
+    =lazy-value-info                           -   Lazy Value Information Analysis
+    =lcssa                                     -   Loop-Closed SSA Form Pass
+    =lda                                       -   Loop Dependence Analysis
+    =libcall-aa                                -   LibCall Alias Analysis
+    =licm                                      -   Loop Invariant Code Motion
+    =linearscan-regalloc                       -   Linear Scan Register Allocator
+    =lint                                      -   Statically lint-checks LLVM IR
+    =live-values                               -   Value Liveness Analysis
+    =liveintervals                             -   Live Interval Analysis
+    =livestacks                                -   Live Stack Slot Analysis
+    =livevars                                  -   Live Variable Analysis
+    =loop-deletion                             -   Delete dead loops
+    =loop-extract                              -   Extract loops into new functions
+    =loop-extract-single                       -   Extract at most one loop into a new function
+    =loop-index-split                          -   Index Split Loops
+    =loop-reduce                               -   Loop Strength Reduction
+    =loop-rotate                               -   Rotate Loops
+    =loop-splitting                            -   Split virtual regists across loop boundaries.
+    =loop-unroll                               -   Unroll loops
+    =loop-unswitch                             -   Unswitch loops
+    =loops                                     -   Natural Loop Information
+    =loopsimplify                              -   Canonicalize natural loops
+    =loweratomic                               -   Lower atomic intrinsics to non-atomic form
+    =lowerinvoke                               -   Lower invoke and unwind, for unwindless code generators
+    =lowersetjmp                               -   Lower Set Jump
+    =lowerswitch                               -   Lower SwitchInst's to branches
+    =machine-cse                               -   Machine Common Subexpression Elimination
+    =machine-loops                             -   Machine Natural Loop Construction
+    =machine-sink                              -   Machine code sinking
+    =machinedomtree                            -   MachineDominator Tree Construction
+    =machinelicm                               -   Machine Loop Invariant Code Motion
+    =machinemoduleinfo                         -   Machine Module Information
+    =machineverifier                           -   Verify generated machine code
+    =mem2reg                                   -   Promote Memory to Register
+    =memcpyopt                                 -   MemCpy Optimization
+    =memdep                                    -   Memory Dependence Analysis
+    =mergefunc                                 -   Merge Functions
+    =mergereturn                               -   Unify function exit nodes
+    =module-debuginfo                          -   Decodes module-level debug info
+    =no-aa                                     -   No Alias Analysis (always returns 'may' alias)
+    =no-profile                                -   No Profile Information
+    =opt-phis                                  -   Optimize machine instruction PHIs
+    =partial-inliner                           -   Partial Inliner
+    =partialspecialization                     -   Partial Specialization
+    =peephole-opts                             -   Peephole Optimizations
+    =phi-node-elimination                      -   Eliminate PHI nodes for register allocation
+    =pointertracking                           -   Track pointer bounds
+    =postdomfrontier                           -   Post-Dominance Frontier Construction
+    =postdomtree                               -   Post-Dominator Tree Construction
+    =pre-alloc-splitting                       -   Pre-Register Allocation Live Interval Splitting
+    =preverify                                 -   Preliminary module verification
+    =print-alias-sets                          -   Alias Set Printer
+    =print-callgraph                           -   Print a call graph
+    =print-callgraph-sccs                      -   Print SCCs of the Call Graph
+    =print-cfg-sccs                            -   Print SCCs of each function CFG
+    =print-dbginfo                             -   Print debug info in human readable form
+    =print-dom-info                            -   Dominator Info Printer
+    =print-externalfnconstants                 -   Print external fn callsites passed constants
+    =print-function                            -   Print function to stderr
+    =print-module                              -   Print module to stderr
+    =print-used-types                          -   Find Used Types
+    =processimpdefs                            -   Process Implicit Definitions.
+    =profile-estimator                         -   Estimate profiling information
+    =profile-loader                            -   Load profile information from llvmprof.out
+    =profile-verifier                          -   Verify profiling information
+    =prologepilog                              -   Prologue/Epilogue Insertion
+    =prune-eh                                  -   Remove unused exception handling info
+    =reassociate                               -   Reassociate expressions
+    =reg2mem                                   -   Demote all values to stack slots
+    =regions                                   -   Detect single entry single exit regions
+    =rendermf                                  -   Render machine functions (and related info) to HTML pages
+    =scalar-evolution                          -   Scalar Evolution Analysis
+    =scalarrepl                                -   Scalar Replacement of Aggregates
+    =sccp                                      -   Sparse Conditional Constant Propagation
+    =scev-aa                                   -   ScalarEvolution-based Alias Analysis
+    =simple-register-coalescing                -   Simple Register Coalescing
+    =simplify-libcalls                         -   Simplify well-known library calls
+    =simplify-libcalls-halfpowr                -   Simplify half_powr library calls
+    =simplifycfg                               -   Simplify the CFG
+    =sink                                      -   Code sinking
+    =slotindexes                               -   Slot index numbering
+    =split-geps                                -   split complex GEPs into simple GEPs
+    =sretpromotion                             -   Promote sret arguments to multiple ret values
+    =stack-protector                           -   Insert stack protectors
+    =stack-slot-coloring                       -   Stack Slot Coloring
+    =strip                                     -   Strip all symbols from a module
+    =strip-dead-debug-info                     -   Strip debug info for unused symbols
+    =strip-dead-prototypes                     -   Strip Unused Function Prototypes
+    =strip-debug-declare                       -   Strip all llvm.dbg.declare intrinsics
+    =strip-nondebug                            -   Strip all symbols, except dbg symbols, from a module
+    =strong-phi-node-elimination               -   Eliminate PHI nodes for register allocation, intelligently
+    =tailcallelim                              -   Tail Call Elimination
+    =tailduplicate                             -   Tail Duplication
+    =targetdata                                -   Target Data Layout
+    =tbaa                                      -   Type-Based Alias Analysis
+    =twoaddressinstruction                     -   Two-Address instruction pass
+    =unreachable-mbb-elimination               -   Remove unreachable machine basic blocks
+    =unreachableblockelim                      -   Remove unreachable blocks from the CFG
+    =verify                                    -   Module Verifier
+    =view-cfg                                  -   View CFG of function
+    =view-cfg-only                             -   View CFG of function (with no function bodies)
+    =view-dom                                  -   View dominance tree of function
+    =view-dom-only                             -   View dominance tree of function (with no function bodies)
+    =view-postdom                              -   View postdominance tree of function
+    =view-postdom-only                         -   View postdominance tree of function (with no function bodies)
+    =view-regions                              -   View regions of function
+    =view-regions-only                         -   View regions of function (with no function bodies)
+    =virtregmap                                -   Virtual Register Map
+  -print-after-all                             - Print IR after each pass
+  -print-before                                - Print IR before specified passes
+    =aa-eval                                   -   Exhaustive Alias Analysis Precision Evaluator
+    =adce                                      -   Aggressive Dead Code Elimination
+    =always-inline                             -   Inliner for always_inline functions
+    =argpromotion                              -   Promote 'by reference' arguments to scalars
+    =basicaa                                   -   Basic Alias Analysis (default AA impl)
+    =basiccg                                   -   Basic CallGraph Construction
+    =block-placement                           -   Profile Guided Basic Block Placement
+    =break-crit-edges                          -   Break critical edges in CFG
+    =calcspillweights                          -   Calculate spill weights
+    =codegenprepare                            -   Optimize for code generation
+    =collector-metadata                        -   Create Garbage Collector Module Metadata
+    =constmerge                                -   Merge Duplicate Global Constants
+    =constprop                                 -   Simple constant propagation
+    =correlated-propagation                    -   Value Propagation
+    =count-aa                                  -   Count Alias Analysis Query Responses
+    =dce                                       -   Dead Code Elimination
+    =dead-mi-elimination                       -   Remove dead machine instructions
+    =deadargelim                               -   Dead Argument Elimination
+    =deadarghaX0r                              -   Dead Argument Hacking (BUGPOINT USE ONLY; DO NOT USE)
+    =deadtypeelim                              -   Dead Type Elimination
+    =debug-aa                                  -   AA use debugger
+    =die                                       -   Dead Instruction Elimination
+    =domfrontier                               -   Dominance Frontier Construction
+    =domtree                                   -   Dominator Tree Construction
+    =dot-callgraph                             -   Print Call Graph to 'dot' file
+    =dot-cfg                                   -   Print CFG of function to 'dot' file
+    =dot-cfg-only                              -   Print CFG of function to 'dot' file (with no function bodies)
+    =dot-dom                                   -   Print dominance tree of function to 'dot' file
+    =dot-dom-only                              -   Print dominance tree of function to 'dot' file (with no function bodies)
+    =dot-postdom                               -   Print postdominance tree of function to 'dot' file
+    =dot-postdom-only                          -   Print postdominance tree of function to 'dot' file (with no function bodies)
+    =dot-regions                               -   Print regions of function to 'dot' file
+    =dot-regions-only                          -   Print regions of function to 'dot' file (with no function bodies)
+    =dse                                       -   Dead Store Elimination
+    =extract-blocks                            -   Extract Basic Blocks From Module (for bugpoint use)
+    =functionattrs                             -   Deduce function attributes
+    =globaldce                                 -   Dead Global Elimination
+    =globalopt                                 -   Global Variable Optimizer
+    =globalsmodref-aa                          -   Simple mod/ref analysis for globals
+    =gvn                                       -   Global Value Numbering
+    =if-converter                              -   If Converter
+    =indvars                                   -   Canonicalize Induction Variables
+    =inline                                    -   Function Integration/Inlining
+    =insert-edge-profiling                     -   Insert instrumentation for edge profiling
+    =insert-optimal-edge-profiling             -   Insert optimal instrumentation for edge profiling
+    =instcombine                               -   Combine redundant instructions
+    =instcount                                 -   Counts the various types of Instructions
+    =instnamer                                 -   Assign names to anonymous instructions
+    =internalize                               -   Internalize Global Symbols
+    =intervals                                 -   Interval Partition Construction
+    =ipconstprop                               -   Interprocedural constant propagation
+    =ipsccp                                    -   Interprocedural Sparse Conditional Constant Propagation
+    =iv-users                                  -   Induction Variable Users
+    =jump-threading                            -   Jump Threading
+    =lazy-value-info                           -   Lazy Value Information Analysis
+    =lcssa                                     -   Loop-Closed SSA Form Pass
+    =lda                                       -   Loop Dependence Analysis
+    =libcall-aa                                -   LibCall Alias Analysis
+    =licm                                      -   Loop Invariant Code Motion
+    =linearscan-regalloc                       -   Linear Scan Register Allocator
+    =lint                                      -   Statically lint-checks LLVM IR
+    =live-values                               -   Value Liveness Analysis
+    =liveintervals                             -   Live Interval Analysis
+    =livestacks                                -   Live Stack Slot Analysis
+    =livevars                                  -   Live Variable Analysis
+    =loop-deletion                             -   Delete dead loops
+    =loop-extract                              -   Extract loops into new functions
+    =loop-extract-single                       -   Extract at most one loop into a new function
+    =loop-index-split                          -   Index Split Loops
+    =loop-reduce                               -   Loop Strength Reduction
+    =loop-rotate                               -   Rotate Loops
+    =loop-splitting                            -   Split virtual regists across loop boundaries.
+    =loop-unroll                               -   Unroll loops
+    =loop-unswitch                             -   Unswitch loops
+    =loops                                     -   Natural Loop Information
+    =loopsimplify                              -   Canonicalize natural loops
+    =loweratomic                               -   Lower atomic intrinsics to non-atomic form
+    =lowerinvoke                               -   Lower invoke and unwind, for unwindless code generators
+    =lowersetjmp                               -   Lower Set Jump
+    =lowerswitch                               -   Lower SwitchInst's to branches
+    =machine-cse                               -   Machine Common Subexpression Elimination
+    =machine-loops                             -   Machine Natural Loop Construction
+    =machine-sink                              -   Machine code sinking
+    =machinedomtree                            -   MachineDominator Tree Construction
+    =machinelicm                               -   Machine Loop Invariant Code Motion
+    =machinemoduleinfo                         -   Machine Module Information
+    =machineverifier                           -   Verify generated machine code
+    =mem2reg                                   -   Promote Memory to Register
+    =memcpyopt                                 -   MemCpy Optimization
+    =memdep                                    -   Memory Dependence Analysis
+    =mergefunc                                 -   Merge Functions
+    =mergereturn                               -   Unify function exit nodes
+    =module-debuginfo                          -   Decodes module-level debug info
+    =no-aa                                     -   No Alias Analysis (always returns 'may' alias)
+    =no-profile                                -   No Profile Information
+    =opt-phis                                  -   Optimize machine instruction PHIs
+    =partial-inliner                           -   Partial Inliner
+    =partialspecialization                     -   Partial Specialization
+    =peephole-opts                             -   Peephole Optimizations
+    =phi-node-elimination                      -   Eliminate PHI nodes for register allocation
+    =pointertracking                           -   Track pointer bounds
+    =postdomfrontier                           -   Post-Dominance Frontier Construction
+    =postdomtree                               -   Post-Dominator Tree Construction
+    =pre-alloc-splitting                       -   Pre-Register Allocation Live Interval Splitting
+    =preverify                                 -   Preliminary module verification
+    =print-alias-sets                          -   Alias Set Printer
+    =print-callgraph                           -   Print a call graph
+    =print-callgraph-sccs                      -   Print SCCs of the Call Graph
+    =print-cfg-sccs                            -   Print SCCs of each function CFG
+    =print-dbginfo                             -   Print debug info in human readable form
+    =print-dom-info                            -   Dominator Info Printer
+    =print-externalfnconstants                 -   Print external fn callsites passed constants
+    =print-function                            -   Print function to stderr
+    =print-module                              -   Print module to stderr
+    =print-used-types                          -   Find Used Types
+    =processimpdefs                            -   Process Implicit Definitions.
+    =profile-estimator                         -   Estimate profiling information
+    =profile-loader                            -   Load profile information from llvmprof.out
+    =profile-verifier                          -   Verify profiling information
+    =prologepilog                              -   Prologue/Epilogue Insertion
+    =prune-eh                                  -   Remove unused exception handling info
+    =reassociate                               -   Reassociate expressions
+    =reg2mem                                   -   Demote all values to stack slots
+    =regions                                   -   Detect single entry single exit regions
+    =rendermf                                  -   Render machine functions (and related info) to HTML pages
+    =scalar-evolution                          -   Scalar Evolution Analysis
+    =scalarrepl                                -   Scalar Replacement of Aggregates
+    =sccp                                      -   Sparse Conditional Constant Propagation
+    =scev-aa                                   -   ScalarEvolution-based Alias Analysis
+    =simple-register-coalescing                -   Simple Register Coalescing
+    =simplify-libcalls                         -   Simplify well-known library calls
+    =simplify-libcalls-halfpowr                -   Simplify half_powr library calls
+    =simplifycfg                               -   Simplify the CFG
+    =sink                                      -   Code sinking
+    =slotindexes                               -   Slot index numbering
+    =split-geps                                -   split complex GEPs into simple GEPs
+    =sretpromotion                             -   Promote sret arguments to multiple ret values
+    =stack-protector                           -   Insert stack protectors
+    =stack-slot-coloring                       -   Stack Slot Coloring
+    =strip                                     -   Strip all symbols from a module
+    =strip-dead-debug-info                     -   Strip debug info for unused symbols
+    =strip-dead-prototypes                     -   Strip Unused Function Prototypes
+    =strip-debug-declare                       -   Strip all llvm.dbg.declare intrinsics
+    =strip-nondebug                            -   Strip all symbols, except dbg symbols, from a module
+    =strong-phi-node-elimination               -   Eliminate PHI nodes for register allocation, intelligently
+    =tailcallelim                              -   Tail Call Elimination
+    =tailduplicate                             -   Tail Duplication
+    =targetdata                                -   Target Data Layout
+    =tbaa                                      -   Type-Based Alias Analysis
+    =twoaddressinstruction                     -   Two-Address instruction pass
+    =unreachable-mbb-elimination               -   Remove unreachable machine basic blocks
+    =unreachableblockelim                      -   Remove unreachable blocks from the CFG
+    =verify                                    -   Module Verifier
+    =view-cfg                                  -   View CFG of function
+    =view-cfg-only                             -   View CFG of function (with no function bodies)
+    =view-dom                                  -   View dominance tree of function
+    =view-dom-only                             -   View dominance tree of function (with no function bodies)
+    =view-postdom                              -   View postdominance tree of function
+    =view-postdom-only                         -   View postdominance tree of function (with no function bodies)
+    =view-regions                              -   View regions of function
+    =view-regions-only                         -   View regions of function (with no function bodies)
+    =virtregmap                                -   Virtual Register Map
+  -print-before-all                            - Print IR before each pass
+  -print-machineinstrs                         - Print generated machine code
+  -profile-estimator-loop-weight=<loop-weight> - Number of loop executions used for profile-estimator
+  -profile-info-file=<filename>                - Profile file loaded by -profile-loader
+  -profile-verifier-noassert                   - Disable assertions
+  -realign-stack                               - Realign stack if needed
+  -regalloc                                    - Register allocator to use
+    =default                                   -   pick register allocator based on -O option
+    =fast                                      -   fast register allocator
+    =linearscan                                -   linear scan register allocator
+    =pbqp                                      -   PBQP register allocator
+  -relocation-model                            - Choose relocation model
+    =default                                   -   Target default relocation model
+    =static                                    -   Non-relocatable code
+    =pic                                       -   Fully relocatable, position independent code
+    =dynamic-no-pic                            -   Relocatable external references, non-relocatable code
+  -rewriter                                    - Rewriter to use (default=local)
+    =local                                     -   local rewriter
+    =trivial                                   -   trivial rewriter
+  -schedule-spills                             - Schedule spill code
+  -shrink-wrap                                 - Shrink wrap callee-saved register spills/restores
+  -soft-float                                  - Generate software floating point library calls
+  -spiller                                     - Spiller to use: (default: standard)
+    =trivial                                   -   trivial spiller
+    =standard                                  -   default spiller
+    =splitting                                 -   splitting spiller
+    =inline                                    -   inline spiller
+  -spiller-splits-edges                        - Allow critical edge splitting during spilling
+  -stack-alignment=<uint>                      - Override default stack alignment
+  -stack-protector-buffer-size=<uint>          - Lower bound for a buffer to be considered for stack protection
+  -stats                                       - Enable statistics output from program
+  -std-compile-opts                            - Include the standard compile time optimizations
+  -std-link-opts                               - Include the standard link time optimizations
+  -strip-debug                                 - Strip debugger symbol info from translation unit
+  -tailcallopt                                 - Turn fastcc calls into tail calls by (potentially) changing ABI.
+  -time-passes                                 - Time each pass, printing elapsed time for each on exit
+  -unwind-tables                               - Generate unwinding tables for all functions
+  -verify-dom-info                             - Verify dominator info (time consuming)
+  -verify-each                                 - Verify after each transform
+  -verify-loop-info                            - Verify loop info (time consuming)
+  -verify-region-info                          - Verify region info (time consuming)
+  -version                                     - Display the version of this program
+  -x86-asm-syntax                              - Choose style of code to emit from X86 backend:
+    =att                                       -   Emit AT&T-style assembly
+    =intel                                     -   Emit Intel-style assembly

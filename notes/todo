@@ -1,0 +1,31 @@
+updates.cmm crappy code
+
+dph - quickhull crappy code
+
+vector support
+
+win64 version using llvm
+
+ARM version using llvm
+
+gold / lto support
+
+opt flags
+
+Merge NCG branch
+
+Can't bootstrap under windows.
+
+make clean under windows seems to remove the inplace gcc, and then calling make after doesn't restore it so the build process fails.
+
+ccache
+
+Store interface def in object file
+
+nice format numbers (1_000_000)
+
+even is very slow for word32 because it casts n to a Integer since even n = n `rem` 2 == 0 and the 2 forces n to be an integer
+
+http://hackage.haskell.org/trac/ghc/ticket/1473#comment:4
+
+build bot

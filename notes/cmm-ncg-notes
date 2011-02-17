@@ -1,0 +1,96 @@
+Notes from study of New Code Gen
+--------------------------------
+
+This document discusses the calling of the garbage collector. This brings in a large amount of the design and RTS of STG.
+
+If you look at the output of Cmm code, then you will notice a lot of functions start with a stack and/or heap check like so:
+
+AMod_abc_entry:
+  entry:
+    _v = R2
+	 _w = R3
+	 if (Sp - 40 < SpLim) goto spL
+	 Hp = Hp + 20
+	 if (Hp > HpLim) goto hpL
+
+	 [... funtion code now we have stack and heap space needed ...]
+
+  hpL:
+    HpAlloc = 20
+  spL:
+    R1 = AMod_abc_closure;
+	 jump stg_gc_fun
+
+
+So what is going on here? Well first of, naming conventions. The function name, 'AMod_abc_entry' indicates that this is the entry code (sometimes refered to as the fast entry code [will discuss why later]) for a haskell function called 'abc' that resides in a module 'AMod'. Other data and functions that are related to this function will have names that have the same prefix of 'AMod_abc' but end differently to indicate their role.
+
+The labelling depends on if the TNTC optimisaiton is enabled or not:
+
+TNTC enabled:
+ - AMod_abc_info  => Function code (fast entry point, positive offsets, can jump to to label to enter code) and info table (negative offsets).
+ - AMod_abc_slow  => Function code. (slow entry point, will jump to fast entry point next).
+ - AMod_abc_closure => Function closure.
+ - AMod_abc_ret   => A return point (a proc point basically, function created just so we can return to it)
+
+TNTC disabled:
+ - Amod_abc_info  => Function info table.
+ - AMod_abc_entry => Function code (fast entry point).
+ - AMod_abc_slow  => Function code. (slow entry point, will jump to fast entry point next).
+ - AMod_abc_closure => Function closure.
+ - AMod_abc_ret   => A return point (a proc point basically, function created just so we can return to it)
+
+One important thing to note is that during code generation, regardless of if TNTC is enabled or not, GHC will initially create function entry labels using the '_entry' suffix. Only later in the pipeline near the very end do they get switched to the '_info' suffix if TNTC is enabled. So basically when looking at Cmm code with TNTC enabled (it is by default so yes it should be for you) keep in mind when you see labels that 'AMod_abc_entry' and 'AMod_abc_info' refer to the same location. This same rule applies for '_ret' functions as well. So with TNTC they will be changed to '_info' just as '_entry' functions are. Basically when TNTC is enabled, if a function has an attached info table, its label suffix will be changed to '_info'.
+
+Back to the original code. On entry to any function or thunk, if any stack or heap space is used in the code (which is most often yes) then a stack and/or heap check must be done. If it succeeds (in that we have enough stack and heap available to run this code) then the code executes as expected. If it fails we must call the GC. Both stack and heap check failures call the same garbage collector function. The garbage collector can tell the difference between a stack failure and heap failure by looking at the HpAlloc STG register (Note that on all current GHC targets the HpAlloc register isn't mapped to a hardware register so is instead accessed by offsetting from BaseReg, e.g HpAlloc ~= [BaseReg + 184]). If the garbage collector has been called because of a Heap check failure, then HpAlloc will be non-zero. If instead there was a stack failure, HpAlloc will be zero.
+
+Keep in mind that calls to the garbage collector do two things. First the GC simply tries to allocate space. Haskell code calls the garbage collector not because it thinks some memory should be free'd. It call the garbage collector as an allocator, because it wants some space. So when called, the garbage collector, if there is space already available to hand out, it does so. If there isn't space available to hand out, it performs an actual garbage collection.
+
+The next problem though is how to call the garbage collector. Multiple entry points into the garbage collector are provided by the RTS for performance reasons as we will explain. The RTS could probably just provide one entry point for the garbage collector but performance would suffer as this one entry point would need to handle every situation. We provide a generic entry point into the GC in the RTS but also provide an array of specialised entry points that are written to handle specific common cases.
+
+So what are the differences between these GC entry points? What is it that they need to do before calling the garbage collector proper. Well calls to the garbage collector differ in two ways -- (1) where they expect the return address to be and (2) which STG registers they will save. The semantics of the STG registers for calls across Haskell code is that the STG registers can not be expected to be preserved. Since Haskell code eventually uses CPS where we are continually tail calling anyway, having the STG registers being preserved doesn't even make sense. So the function making the call to the garbage collector must somehow save any registers that are live across the GC call. As stack and heap checks are currently done on function/thunk entry, the only live STG registers are those containing passed arguments. So with that in mind lets quickly look at argument passing.
+
+GHC's argument passing (or calling) convention is actually very simple. The first <n> arguments are passed in the STG registers of correct type for the argument and the rest of the arguments are passed on the stack. <n> is the number of STG registers that are pinned to hardware registers (once again STG register must be of correct type). There is one complication to this, the so called 'node' argument. The node argument is an implicit argument taken by all functions. It is a pointer to the closure for that function and is needed primarily so that the code can access its free variables which are stored in the closure's payload (closure is simply a pointer to an info table that describes the closure, and the bound free variables). The node argument is always passed in register R1. Now not all code has free variables but in these cases R1 is still reserved for passing the node. The reason for this is a design decision. Having R1 always reserved for the node regardless of if the actual code needs it or not keeps things simpler and also doesn't necessarily decrease performance as we'll see later (sneak peak: If we didn't always reserve R1, sometimes arguments for a function would start in R1 sometimes in R2. This would cause situation where the code generator would need to shuffle registers up or down one). As said though its a design decision and other approaches could work equally as well, we just chose this one.
+
+So the story so far. We have a function / thunk entry code and we need to allocate some space so we call the garbage collector to do this. We need to save any live registers across the GC call, which since the stack/heap checks are done on entry just consist of the arguments and node. So lets see what code would need to be generated to do this using only a single generic GC entry point.
+
+Firstly, we must save the live registers. This is done by setting up a stack frame (just a Sp subtraction) and pushing them onto the stack. There is one complication to this. A stack frame has an info table pointer at the start of it. The reason for this is that the GC needs to be able to walk the stack and find pointers (gc roots). The info table pointer at he start of a stack frame describes the stack frame layout, just like it does for a closures payload in the heap. Secondly, we want the GC to return to the point that it was called at, so that we can branch back to the heap/stack check to make sure we have the space and finally run the code. This is already done actually. As the first word is an info table and info tables have code / an entry point, we just return to the code for the info table.
+
+The cmm code for this looks like (sort of):
+
+// need an info table here when TNTC is enabled.
+AMod_abc_entry:
+  entry:
+    // node = R1
+    _v = R2;
+	 _w = R3;
+	 goto spCheck;
+
+  spCheck:
+    if (Sp - 24 < SpLim) goto spAlloc;
+	 Hp = Hp + 20
+	 if (Hp > HpLim) goto hpAlloc;
+    goto gcOK; // actual entry code.
+
+  hpAlloc:
+    HpAlloc = 20;
+	 goto spAlloc;
+  spAlloc:
+    Sp = Sp - 12
+    [Sp + 8] = _w
+	 [Sp + 4] = _v
+	 [Sp + 0] = &gcReturn;
+	 jump stg_gc_generic;
+  // need an info table here when TNTC is enabled.
+  gcReturn:
+    _w = [Sp + 8];
+	 _v = [Sp + 4];
+    Sp = Sp + 12;
+	 goto spCheck;
+
+  gcOK:
+    // actual code
+
+This gives you the general idea of what we are trying to achieve. There are two problems with the above code -- (1) we want to take the address of a block label to use as the return address and (2) even if we can do this, we need to now attach an info table to that block label somehow since the GC stack walker expects to be able to find an info table by taking a negative offset from 'gcReturn' with TNTC enabled. Now this can be done but only really in the native code generator. We require some fairly strange code, with a function containing data intermingled into it before various block labels and also that we can take the address of those block labels. Neither of these things can be done in GNU C (there is an extension that allows the address of label to be taken, but it has undefined semantics when that address is used outside the function).
+
+So to solve both these problems we use an idea refered to as 'Proc Points'. This basically means a Cmm procedure will be split into multiple Cmm procudures to allow block label addresses to be taken (since they're now funciton labels) and info tables to be placed before them (this still requires post processing the assembly produced by GCC). We can use some tricks to try to minimise the number of proc points we have to use for a Cmm procedure. For example, in the above code we want to return to spCheck which means it needs to be a proc point. However we can avoid this by instead return to AMod_abc_entry, the function entry. To do this we need the code in gcReturn to match the code in 'entry' though, which means the garbage collector must call the return address it was given using the same calling convention as AMod_abc_entry has. This isn't too difficult to arrange, so its what we do. We apply this optimisation as much as we can to try to minimise proc points. In the future once we drop the C backend we hope to get rid of proc points altogether (which means we need to be able to take the address of a block label and put info tables inside functions. This is all OK for the NCG but may be troublesome for the LLVM backend. An alternative approach is that the LLVM backend may be able to convert from the CPS style to SSA style to partially resolve this problem (as well as bring other benefits)).
+
