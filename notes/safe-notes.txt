@@ -1,0 +1,15 @@
+- what is the use of having safe being order dependent?
+  e.g {-# LANGUAGE TemplateHaskell #-}
+      {-# LANGUAGE Safe #-}
+  is ok? (but what does this do? safe but TH allowed unlike usual?)
+  
+  so {-# LANGUAGE Safe #-}
+     {-# LANGUAGE TemplateHaskell #-}
+  is bad? So having a language pragma before safe enables features that
+  safe would usually disallow?
+
+- most of the use of -XSafe being order dependent seem to be about enabling the safe code style for style not saftey reasons. Better to have a flag for Safe that is about style? So basically same as safe but maybe just warns on using certain unsafe extensions and also doesn't assume all imports to be 'safe', allows unsafe imports. Wait thats basically 'untrustworthy' right?
+
+- in implementation you speak of recording a trust dependency set. What exactly is this? This list of modules that this module depends on being 'safe'. There is no speak of how a module itself is marked as being safe though (e.g mustn't we record somehow that this module sucessfully compiled with -XSafe or -XTrustworthy?). What is the use of the trust dependecy? once code is in a compiled state are we concerned with what it relied on being safe? That was already checked at compile time, when will this trust dependecy set be used?
+
+
