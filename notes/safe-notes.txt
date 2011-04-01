@@ -12,4 +12,8 @@
 
 - in implementation you speak of recording a trust dependency set. What exactly is this? This list of modules that this module depends on being 'safe'. There is no speak of how a module itself is marked as being safe though (e.g mustn't we record somehow that this module sucessfully compiled with -XSafe or -XTrustworthy?). What is the use of the trust dependecy? once code is in a compiled state are we concerned with what it relied on being safe? That was already checked at compile time, when will this trust dependecy set be used?
 
+- check out modula 3 unsafe/safe divide
+http://c2.com/cgi/wiki?UniversalProgrammingLanguage
+
+- is it better to have safe assumed rather than unsafe?
 
