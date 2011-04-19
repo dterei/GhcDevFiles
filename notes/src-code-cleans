@@ -1,0 +1,18 @@
+== main/CmdLineParser.hs : 157 ==
+
+> HasArg f | notNull rest_no_eq -> Right (f rest_no_eq, args)
+>     | otherwise    -> case args of
+>                        [] -> missingArgErr dash_arg
+>                        (L _ arg1:args1) -> Right (f arg1, args1)
+>
+> SepArg f -> case args of
+>            [] -> unknownFlagErr dash_arg
+>            (L _ arg1:args1) -> Right (f arg1, args1)
+
+Shouldn't 'unknownFlagErr' acutally be a 'missingArgErr'?
+
+== DynFlags.hs ==
+
+'-package-name' flag is recorded as dynamic in user doc but is static
+in actual code. Which one is right? Needs to be fixed.
+
