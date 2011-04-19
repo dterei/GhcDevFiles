@@ -1,0 +1,2753 @@
+1 patch for repository http://darcs.haskell.org/ghc:
+
+Tue Mar 22 00:13:00 PDT 2011  David Terei <davidterei@gmail.com>
+  * LLVM: Improve handling of dead stg registers.
+
+New patches:
+
+[LLVM: Improve handling of dead stg registers.
+David Terei <davidterei@gmail.com>**20110322071300
+ Ignore-this: b1061b4fd620efa386bf07d20bd6f34a
+] {
+hunk ./compiler/llvmGen/LlvmCodeGen/CodeGen.hs 29
+ import Unique
+ import Util
+ 
+-import Data.List ( partition )
++import Data.List ( delete, find, partition )
++import Data.Maybe ( fromMaybe )
+ import Control.Monad ( liftM )
+ 
+ type LlvmStatements = OrdList LlvmStatement
+hunk ./compiler/llvmGen/LlvmCodeGen/CodeGen.hs 71
+        let ((BasicBlock id fstmts):rblks) = blocks'
+        fplog <- funPrologue
+        let fblocks = (BasicBlock id (fplog ++  allocs' ++ fstmts)):rblks
+-       return (env, fblocks, tops)
++       let fblocks' = pushDownUndef fblocks (head fblocks) []
++       return (env, fblocks', tops)
+ 
+ basicBlocksCodeGen env (block:blocks) (lblocks', ltops')
+   = do (env', lb, lt) <- basicBlockCodeGen env block
+hunk ./compiler/llvmGen/LlvmCodeGen/CodeGen.hs 80
+        let ltops   = ltops' ++ lt
+        basicBlocksCodeGen env' blocks (lblocks, ltops)
+ 
++callerSavesRegs :: [GlobalReg]
++callerSavesRegs = filter callerSaves activeStgRegs
++
++llvmCallerSavesRegs :: [LlvmVar]
++llvmCallerSavesRegs = map lmGlobalRegVar callerSavesRegs
++
++llvmRegs :: [(LlvmVar, Int)]
++llvmRegs = zip (map lmGlobalRegVar activeStgRegs) [1..]
++
++pushDownUndef :: [LlvmBasicBlock] -> LlvmBasicBlock -> [LlvmVar] -> [LlvmBasicBlock]
++pushDownUndef blocks (BasicBlock id stmts) trashed
++  = let lstmt = last stmts
++        tcall = stmts !! (length stmts - 2)
++        trashed' = foldl checkStmt trashed stmts
++
++        -- trash
++        checkStmt _ (Assignment _ (Call _ f _ _)) | trashCall f = llvmCallerSavesRegs
++        checkStmt _ (Expr (Call _ f _ _)) | trashCall f = llvmCallerSavesRegs
++        -- reload
++        checkStmt t (Store _ v) | v `elem` llvmCallerSavesRegs = delete v t
++        -- default
++        checkStmt t _ = t
++
++        trashCall v
++            | (LMFunction decl) <- getVarType v
++            = funcCc decl == CC_Ccc
++            | otherwise
++            = False
++        
++        succ = case lstmt of
++                    Branch v -> [v]
++                    BranchIf _ l r -> [l,r]
++                    Switch _ d targs -> d : (snd $ unzip targs)
++                    Return Nothing -> []
++                    _other -> error "bad final stmt!"
++
++        lmUndefVar v = LMLitVar $ LMUndefLit $ pLower $ getVarType v
++
++        tcall' = case tcall of
++                    Expr (Call TailCall v args attrs) ->
++                        let args' = foldl mkUndef args trashed'
++                        in Expr $ Call TailCall v args' attrs
++                    _other -> tcall
++
++        mkUndef args a =
++            let i = find (\x -> fst x == a) llvmRegs
++                (v,i') = fromMaybe (error "") i
++                args' = (take (i' - 1) args) ++ (lmUndefVar v):(drop i' args)
++            in args'
++                
++        findMeBlock idx (BasicBlock id' _) = idx == id'
++        (a,b) = break (findMeBlock id) blocks
++        com = Comment [fsLit $ show trashed']
++        newblk = BasicBlock id $ take (length stmts - 2) stmts ++ [com, tcall', lstmt]
++        blocks' = a ++ (newblk:(tail b))
++        getLabelId (LMLocalVar unq _) = unq
++        getLabelId _other             = error "bad label var"
++
++        nextCall [] blks = blks
++        nextCall (x:xs) blks =
++            let (_,b') = break (findMeBlock $ mkBlockId $ getLabelId x) blks
++                blks'  = pushDownUndef blks (head b') trashed'
++            in nextCall xs blks'
++
++    in nextCall succ blocks'
+ 
+ -- | Allocations need to be extracted so they can be moved to the entry
+ -- of a function to make sure they dominate all possible paths in the CFG.
+}
+
+Context:
+
+[Don't use read_only_relocs on darwin x86-64; fixes #4984
+William Knop <william.knop.nospam@gmail.com>**20110309201911
+ Ignore-this: 2e2d90673fc6b32d0978cd9ac5b59905
+] 
+[FunctionalDependencies should imply MultiParamTypeClasses
+Max Bolingbroke <batterseapower@hotmail.com>**20110320140625
+ Ignore-this: 5904198bd4204c1602a1682ed2bd918b
+] 
+[Change how we compute install paths on cygwin
+Ian Lynagh <igloo@earth.li>**20110320012540
+ We used to have
+     MK_INSTALL_DEST = "$(shell cygpath $1)"
+ but this meant we ended up with
+     "$(shell cygpath "[...]/html/`basename $$i`")"
+ and the $(...) gets evaluated before the makefile rule, so the for loop
+ hasn't been run, and so $i isn't defined. So we were taking the basename
+ of the empty string, meaning docs weren't being installed in the right
+ place.
+ 
+ Now we have
+     MK_INSTALL_DEST = $$(cygpath $1)
+ so the evaluation happens in the shell, while the for loop is running.
+] 
+[Add unboxedTupleTName to templateHaskellNames
+Ian Lynagh <igloo@earth.li>**20110317003406] 
+[bindist comparison tool: Improve way-difference behaviour
+Ian Lynagh <igloo@earth.li>**20110316221338] 
+[Bindist comparison tool: add --ignore-size-changes flag
+Ian Lynagh <igloo@earth.li>**20110316220748] 
+[Bindist comparison tool: Handle differences in the library ways nicely
+Ian Lynagh <igloo@earth.li>**20110316214708
+ In particular, this makes it possible to compare release bindists (with
+ profiling files) and validate bindists (without them).
+] 
+[Don't put includes/rts/Config.h in bindists twice
+Ian Lynagh <igloo@earth.li>**20110316190117
+ Ignore-this: b2d37c44557a84ae87675e795de209c
+] 
+[Don't put 2 copies of the RTS libraries in the bindists
+Ian Lynagh <igloo@earth.li>**20110316172945] 
+[Make include file paths a little prettier
+Ian Lynagh <igloo@earth.li>**20110316162045
+ This isn't important, but it stops us getting [...]/./[...] in the paths
+ in bindists.
+] 
+[Initial implementation of bindist comparison tool
+Ian Lynagh <igloo@earth.li>**20110315162912
+ Ignore-this: c92609bde275ac3a61648aa26da97e12
+] 
+[Stop explicitly asking for 10.5 support on OS X; fixes #5011
+Ian Lynagh <igloo@earth.li>**20110313140322
+ XCode 4 doesn't include the 10.5 SDK, so if we explicitly ask for it
+ then linking fails.
+] 
+[Write the XCode version test differently
+Ian Lynagh <igloo@earth.li>**20110313134913
+ Using && causes problems on opensolaris, for an unknown reason.
+ http://www.haskell.org/pipermail/cvs-ghc/2011-March/060314.html
+] 
+[Consistently use <sect1> etc rather than <section>; fixes #5009
+Ian Lynagh <igloo@earth.li>**20110311212958
+ It might be nicer to actually go the other way, and make everything
+ use <section> instead, but this fixes the incorrect numbering for
+ now, and we can look into whether <section> has any disadvantages
+ later.
+] 
+[Drop dead core that was kept alive by RULES in CorePrep (#4962)
+Max Bolingbroke <batterseapower@hotmail.com>**20110219114726
+ Ignore-this: d1c8f1e4aa941911d21081932e14ec5c
+] 
+[Optimise comparisons against min/maxBound (ticket #3744).
+Michal Terepeta <michal.terepeta@gmail.com>**20101027184054
+ Ignore-this: aacf39882c09784f04b7013de025f038
+ 
+ This optimises away comparisons with minBound or maxBound
+ that are always false or always true.
+] 
+[LLVM: Fix #4995, llvm mangler broken for large compiles
+David Terei <davidterei@gmail.com>**20110309215346
+ Ignore-this: 4fcef11ad0be0cff26c108bd05db0485
+] 
+[Improve the XCode version detection
+Ian Lynagh <igloo@earth.li>**20110307225823
+ Amongst other improvements, we now handle 3-component versions
+ (like "3.1.4") correctly.
+] 
+[Impredicative polymorphism no longer deprecated.
+Edward Z. Yang <ezyang@mit.edu>**20110306215916
+ Ignore-this: 49157eaae716879effb99c2638518265
+] 
+[Fix doc formatting
+Ian Lynagh <igloo@earth.li>**20110306151532
+ Ignore-this: 4948eccebbf7637ff84db661a5138dd1
+] 
+[configure: amend sanity check
+Sergei Trofimovich <slyfox@community.haskell.org>**20110301194018
+ Ignore-this: 4f40f8dd28bd436f02b487714b797ee7
+ 
+ As we perform some mangling of original --build/--host/--target
+ params we should check the result of mangling against desired triplet,
+ not originally passed by user.
+ 
+ Patch also adds mangled triplets to the output.
+] 
+[configure: triplet: accept i486 CPU (and more), more vendors and OSes
+Sergei Trofimovich <slyfox@community.haskell.org>**20110301064108
+ Ignore-this: d508348bf04ad74afb069b8c743fd2f4
+ 
+ Gentoo has interesting ports:
+ 
+   - freebsd with following triplet:
+         ./configure --build=i686-gentoo-freebsd8 --host=i686-gentoo-freebsd8 --host=i686-gentoo-freebsd8
+     should be recognized as 'i386-unknown-freebsd'
+   - 'pc' vendor along with non-'i386' is very common:
+         ./configure --build=i486-pc-linux-gnu --i486-pc-linux-gnu --host=i486-pc-linux-gnu
+         ./configure --build=i686-pc-linux-gnu --i686-pc-linux-gnu --host=i686-pc-linux-gnu
+     should be recognized as 'i386-unknown-linux'
+ 
+ Patch adds:
+ 
+   - 'pc' vendor                 (maps to 'unknown')
+   - 'gentoo' vendor             (maps to 'unknown')
+   - 'i486', 'i586', 'i686' CPUs (maps to 'i386')
+   - 'freebsd8' OS               (maps to 'freebsd')
+] 
+[Document -fwarn-missing-import-lists
+simonpj@microsoft.com**20110306000216
+ Ignore-this: 5a857935a775f608d8e00af9ad2b1633
+ 
+ Also change the behaviour slightly, to warn only for
+ *unqualified* imports.  See Trac #4977.
+] 
+[Completed the implementation of VECTORISE SCALAR
+Manuel M T Chakravarty <chak@cse.unsw.edu.au>**20110305123625
+ Ignore-this: 96714958893800c6ae750fb343b32e31
+ - The pragma {-# VECTORISE SCALAR foo #-} marks 'foo' as a
+   scalar function for for vectorisation and generates a
+   vectorised version by applying 'scalar_map' and friends.
+ - The set of scalar functions is not yet emitted into
+   interface files.  This will be added in a subsequent
+   patch via 'VectInfo'.
+] 
+[Fix build, and improve ghc-cabal's errors
+Ian Lynagh <igloo@earth.li>**20110305153931
+ Ignore-this: eb0d1b7ee3dbc7be6a39c9ed3a787d
+] 
+[Whitespace only
+Ian Lynagh <igloo@earth.li>**20110305150238] 
+[Sanity check values that we wrap in single quotes
+Ian Lynagh <igloo@earth.li>**20110305150118
+ Make sure they contain no single quotes, leading spaces, or trailing spaces.
+] 
+[Avoid some shell calls in the build system
+Ian Lynagh <igloo@earth.li>**20110305144825
+ The DEP_INCLUDE_DIRS and DEP_LIB_DIRS variables always contain
+ single-quote dirs, so we can use e.g.
+     $(subst $(space)',$(space)-L',$(space)$($1_$2_DEP_LIB_DIRS_SINGLE_QUOTED))
+ to add -L to the front of each dir. I've appended "_SINGLE_QUOTED" to
+ the variable names so we don't accidentally add bare directories to
+ them.
+] 
+[Make -fno-enable-rewrite-rules work properly
+simonpj@microsoft.com**20110302114317
+ Ignore-this: cd133880e58d9af55cf4454e4c700d
+ 
+ I'd failed to propagate the Opt_EnableRewriteRules flag properly,
+ which meant that -fno-enable-rewrite-rules didn't disable all
+ rewrites.  This patch fixes it.
+] 
+[Comments only
+simonpj@microsoft.com**20110302113041
+ Ignore-this: e97a3ee359e0211b4fb5b5fbf3f5607d
+] 
+[Restore SPECIALISE INSTANCE pragmas
+simonpj@microsoft.com**20110222173112
+ Ignore-this: 4c0a8fab4f9e619d988beb8b5269474f
+ 
+ For some reason I'd commented out this code, which 
+ meant that we weren't getting the the goodness of
+ the SPECIALISE INSTANCE pragamas in GHC.Real. And
+ that in turn killed performance in nofib 'power'
+] 
+[GHC.Prim.threadStatus# now returns the cap number, and the value of TSO_LOCKED
+Simon Marlow <marlowsd@gmail.com>**20110301101025
+ Ignore-this: 49548cffd04bf6fdd3071158d9865034
+] 
+[Improve GHCi line numbers in errors
+Ian Lynagh <igloo@earth.li>**20110227172012
+ Ignore-this: 52c2c2f7c83207e8c7b36fab6ebe52d8
+ When running commands from the user (as opposed to from a file), reset
+ the line number to 1 at the start of each command.
+] 
+[:script file scripts in GHCi #1363
+Vivian McPhail <haskell.vivian.mcphail@gmail.com>**20110226073133
+ This patch adds the script command in GHCi
+ 
+ A file is read and executed as a series of GHCi commands.
+ 
+ Execution terminates on the first error.  The filename and
+ line number are included in the error.
+] 
+[Turn off split objects on Darwin if XCode < 3.2 (#4013)
+Ian Lynagh <igloo@earth.li>**20110225184358
+ Ignore-this: 3e894673649fee957df2413ca82b1c99
+] 
+[libffi: backport incorrect detection of selinux
+Sergei Trofimovich <slyfox@community.haskell.org>**20110208212140
+ Ignore-this: 31bdddb5683acae2bffa3e97effaefea
+ 
+ This patch unbreaks ghci on GRSEC kernels hardened with
+ TPE (Trusted Path Execution) protection.
+ 
+ TPE forbids mmap('rwx') files opened for writes:
+     fd = open (a_file_in_tmp, O_RDWR);
+     mmap (...,               PROT_READ | PROT_WRITE | PROT_EXEC, fd);
+ 
+ while allows anonymous RWX mappings:
+     mmap (...MAP_ANONYMOUS , PROT_READ | PROT_WRITE | PROT_EXEC, -1);
+ 
+ Thanks to klondike for finding it out.
+ 
+ The result of a horrible typo.
+ 
+ (unreleased yet) upstream also has the patch:
+ 
+ http://github.com/atgreen/libffi/commit/eaf444eabc4c78703c0f98ac0197b1619c1b1bef
+] 
+[Generate the OS X installer from a bindist, rather than from a source tree
+Ian Lynagh <igloo@earth.li>**20110223170016] 
+[Use -h rather than -soname; fixes dynlibs on Solaris 10; trac #4973
+Ian Lynagh <igloo@earth.li>**20110222152656] 
+[Fix another fundep error (fixes Trac #4969)
+simonpj@microsoft.com**20110221153239
+ Ignore-this: 9308a7c55346c9eaeaa0818903c8d67b
+ 
+ If I had a pound for every hour Dimitrios and I have spent
+ making functional dependencies work right, we'd be rich!
+ 
+ We had stupidly caused a 'wanted' to be rewritten by a 'derived', with
+ resulting abject failure.  As well as fixing the bug, this patch
+ refactors some more, adds useful assert and comments.
+] 
+[New codegen: GC calling convention must use registers.
+Edward Z. Yang <ezyang@mit.edu>**20110218011745
+ Ignore-this: 13cdd38bb5cea0d244861f01f0004dee
+ 
+ Previously, on register-deficient architectures like x86-32,
+ the new code generator would emit code for calls to stg_gc_l1,
+ stg_gc_d1 and stg_gc_f1 that pushed their single argument on
+ to the stack, while the functions themselves expected the
+ argument to live in L1, D1 and F1 (respectively).  This was
+ because cmmCall with the GC calling convention allocated real
+ registers, not virtual registers.
+ 
+ This patch modifies the code for assigning registers/stack slots
+ to use the right calling convention for GC and adds an assertion
+ to ensure it did it properly.
+] 
+[Added a VECTORISE pragma
+Manuel M T Chakravarty <chak@cse.unsw.edu.au>**20110220105032
+ Ignore-this: e3ed0e7caa45418452858a5a5937264
+ - Added a pragma {-# VECTORISE var = exp #-} that prevents
+   the vectoriser from vectorising the definition of 'var'.
+   Instead it uses the binding '$v_var = exp' to vectorise
+   'var'.  The vectoriser checks that the Core type of 'exp'
+   matches the vectorised Core type of 'var'.  (It would be
+   quite complicated to perform that check in the type checker
+   as the vectorisation of a type needs the state of the VM
+   monad.)
+ - Added parts of a related VECTORISE SCALAR pragma
+ - Documented -ddump-vect
+ - Added -ddump-vt-trace
+ - Some clean up
+] 
+[Reenable object splitting on Darwin, now #4013 appears to be fixed
+Ian Lynagh <igloo@earth.li>**20110219191409
+ Ignore-this: e39e46beab8c8f2dc3369d5ec98610f2
+] 
+[Clarify the "object splitting" variable names
+Ian Lynagh <igloo@earth.li>**20110219161508] 
+[Fix #4867 (updated; corrects address calculation)
+gwright@antiope.com**20110214150924
+ Ignore-this: b68bcf1262f3507e1b9a7459139054bc
+ 
+ This is a corrected fix for ticket #4867, "ghci displays negative floats
+ incorrectly".  The previous patch sometimes gave incorrect offset to values
+ in the __const section of the __TEXT segment.  The new patch arranges a zero
+ fixup for non-external, not-global offset table signed relocations.  This
+ is apparently what is required, though documentation on this point is scarce.
+ 
+ With this change Doubles are negated properly, because the sign bit mask
+ is loaded from the correct offset.  This was tested both on HEAD and the 7.0
+ branch.
+ 
+] 
+[Scale columns in cost-centre-stack report to their contents
+Max Bolingbroke <batterseapower@hotmail.com>**20110216161340
+ Ignore-this: b7138527bb8c139ed554b9e6c9a9f37
+] 
+[Change typechecker-trace output slightly
+simonpj@microsoft.com**20110217175904
+ Ignore-this: 4bf1c9dfa41c598765cd082a35bf193b
+] 
+[Comments only
+simonpj@microsoft.com**20110217175840
+ Ignore-this: b9ea9687b41bfc062137a3ad6fafa3a6
+] 
+[Fix Trac #4966
+simonpj@microsoft.com**20110217141000
+ Ignore-this: d4caaf910dfb86b1e469c5da3fe9cde2
+ 
+ This is just a program that exploits overlapping
+ instances in a delicate way. The fix makes GHC
+ a bit more friendly towards such programs. 
+ 
+ See Note [Overlap and deriving] in TcSimplify
+] 
+[Use "on the spot" solving for fundeps
+simonpj@microsoft.com**20110217140921
+ Ignore-this: 99290ef5538819053af708f5f9464488
+ 
+ When we spot an equality arising from a functional dependency,
+ we now use that equality (a "wanted") to rewrite the work-item
+ constraint right away.  This avoids two dangers
+ 
+  Danger 1: If we send the original constraint on down the pipeline
+            it may react with an instance declaration, and in delicate
+ 	   situations (when a Given overlaps with an instance) that
+ 	   may produce new insoluble goals: see Trac #4952
+ 
+  Danger 2: If we don't rewrite the constraint, it may re-react
+            with the same thing later, and produce the same equality
+            again --> termination worries.
+ 
+ To achieve this required some refactoring of FunDeps.lhs (nicer
+ now!).  
+ 
+ This patch also contains a couple of unrelated improvements
+ 
+ * A bad bug in TcSMonad.nestImplicTcS whereby the Tcs tyvars
+   of an outer implication were not untouchable inside
+ 
+ * Improved logging machinery for the type constraint solver;
+   use -ddump-cs-trace (probably with a wider default line width
+   -dppr-cols=200 or something)
+] 
+[Increase exprIsDupable threshold a bit
+simonpj@microsoft.com**20110215143921
+ Ignore-this: cf5a73026aabaa9f2ca93d0d338a6f56
+ 
+ Now that exprIsDupable is less aggressive, test MethSharing wasn't 
+ doing enough inlining.  Increasing the threshold fixes the problem
+ but the real fix is in Trac #4960.
+] 
+[Ensure exprIsCheap/exprIsExpandable deal with Cast properly
+simonpj@microsoft.com**20110215143655
+ Ignore-this: 13bd5540b048de02737070bfa66f1a71
+ 
+ This bug was causing a Lint error on the stable branch. For some
+ reason it doesn't show up in HEAD, but it's still worth fixing.
+ 
+ The point is that ((f `cast` co) a) is cheap if f has arity>1.
+ This was being gratuitously missed before.
+] 
+[Do not treat absentError specially
+simonpj@microsoft.com**20110215143504
+ Ignore-this: 3a8f6d6eae17b7360f58de86ec934cde
+ 
+ (This was part of an experiment I abandoned.)
+] 
+[Fix exprIsDupable
+simonpj@microsoft.com**20110214111512
+ Ignore-this: 2b800410f8103590da167ae24e7b242d
+ 
+ It turns out that exprIsDupable would return True for an expression of
+ *arbitrary* size, provide it was a nested bunch of applications in
+ which no function had more than three arguments.  That was never the
+ intention, and could give rise to massive code duplication.  
+ 
+ This patch makes it much less aggressive.
+] 
+[Better case-of-case transformation
+simonpj@microsoft.com**20110214111151
+ Ignore-this: 32360d2c7703d772c7a5ad84b019bf87
+ 
+ The ThunkSplitting idea in WorkWrap wasn't working at all,
+ leading to Trac #4957.  The culprit is really the simplifier
+ which was combining the wrong case continuations. See
+ Note [Fusing case continuations] in Simplify.
+] 
+[Cleaned up Expr and Vectorise
+keller@.cse.unsw.edu.au**20110215014434
+ Ignore-this: 11b78040a7d16dc6e5ce7950c73bf8a9
+] 
+[Fixed two syntax errors
+keller@.cse.unsw.edu.au**20110214020531
+ Ignore-this: 1abeebe0171a4262ceacee89adc9246e
+] 
+[Handling of recursive scalar functions in isScalarLam
+keller@cse.unsw.edu.au**20110214002945
+ Ignore-this: db522152971fdcc9c74124d06ef785bd
+] 
+[Added handling of non-recursive module global functions to isScalar check
+keller@cse.unsw.edu.au**20110209042855
+ Ignore-this: feae370a9bcc30371ab62f3700471739
+] 
+[ 
+keller@cse.unsw.edu.au**20110202051408
+ Ignore-this: 7e0e1fcd40315da9abe80e2c2eda877f
+] 
+[Removed minor bug
+keller@cse.unsw.edu.au**20110202040826
+ Ignore-this: 1abdae6a0f39b2ebd002f2587b5d1f53
+] 
+[added handling of data constructors to vectLam
+keller@cse.unsw.edu.au**20110201042807
+ Ignore-this: 511fba94f926bb3a1088b21e36cc1f8c
+] 
+[pruneSparkQueue: check for tagged pointers
+Simon Marlow <marlowsd@gmail.com>**20110214123858
+ Ignore-this: 719f77302b0dff3ba97b66a0d75b2482
+ This was a bug in 6.12.3.  I think the problem no longer occurs due to
+ the way sparks are treated as weak pointers, but it doesn't hurt to
+ test for tagged pointers anyway: better to do the test than have a
+ subtle invariant.
+] 
+[Fix Trac #4953: local let binders can have IdInfo with free names
+simonpj@microsoft.com**20110214140334
+ Ignore-this: c8e5dbc6f0270e45d9cf2edee34d0354
+ 
+ Local let binders in IfaceExpr never used to have unfoldings,
+ but lately they can (becuase they can have an INLINE pragma).
+ We must take account of the variables mentioned in the pragma
+ when computing the fingerprint.
+] 
+[Comments only
+simonpj@microsoft.com**20110214090703
+ Ignore-this: bf950e91e0c984186fea1100aa15d00c
+] 
+[LLVM: Huge improvement to mangler speed.
+David Terei <davidterei@gmail.com>**20110213014406
+ Ignore-this: 4eeaa572dfe956c990895154bd942bb2
+ 
+ The old llvm mangler was horrible! Very slow
+ due to bad design and code. New version is
+ linear complexity as it should be and far
+ lower coefficients. This fixes trac 4838.
+] 
+[Fix platform detection in bindists
+Ian Lynagh <igloo@earth.li>**20110211184244
+ In a bindist, we generate files like the hsc2hs wrapper.
+ This means we need to have the right values for the variables like
+ CONF_GCC_LINKER_OPTS_STAGE1 which in turn means we need to know what
+ platform we're on.
+] 
+[New plan: push unsolved wanteds inwards
+simonpj@microsoft.com**20110211174058
+ Ignore-this: ed40762e260dab75b5e51c696f9965fa
+ 
+ This fixes Trac #4935.  See Note [Preparing inert set for implications].
+ Lots of comments, but not a lot of code is changed!
+] 
+[Remove unnecessary import, plus white space
+simonpj@microsoft.com**20110211173925
+ Ignore-this: 963f455c3c8aee49009b5d5a02f835ac
+] 
+[Fix small but egregious error: using un-zonked constraints in simplifyRule
+simonpj@microsoft.com**20110211173835
+ Ignore-this: 238586e420dbbb1be7f6368117cf6280
+ 
+ This resulted in double unifications.  Fix is trivial.
+] 
+[makeSolvedByInst is only called on wanteds
+simonpj@microsoft.com**20110211173415
+ Ignore-this: 36e6201ab59a082e6dc38e56bea99e29
+ 
+ This patch just adds an assert error.
+] 
+[Enable DTrace on Solaris; based on a patch from Karel Gardas
+Ian Lynagh <igloo@earth.li>**20110210155217
+ Ignore-this: 93eaf0e06c721c80c175aaee9a113e6
+] 
+[Use DTrace whenever it's available
+Ian Lynagh <igloo@earth.li>**20110210153300
+ Ignore-this: 111c72bf20d6eaafd3e488196a89b2c
+ Now that we've stopped trying to support 64bit OS X 10.5, the DTrace
+ problems there don't matter.
+] 
+[replace C++ comments with C comments (Solaris' DTrace fails on C++ comments)
+Karel Gardas <karel.gardas@centrum.cz>**20110112051829
+ Ignore-this: c229292227c7e2b512daf9129cb66aeb
+] 
+[Fix #4867, ghci displays negative floats incorrectly
+gwright@antiope.com**20110209222423
+ Ignore-this: 1b3279fa5f6c4849ed6311275b1a466a
+ 
+ This patch fixes the erroneous relocations that caused
+ the bug in ticket #4867.  External addresses and global
+ offset table entries were relocated correctly, but all other
+ relocations were incorrectly calculated.  This caused, for
+ example, bad references to constants stored in the __const
+ section of the __TEXT segment.
+ 
+ This bug only affected OS X on 64-bit platforms.
+ 
+] 
+[Fix Array sizeof primops to use the correct offset (which happens to be 0, so it worked before anyway). Makes us more future-proof, at least
+Daniel Peebles <pumpkingod@gmail.com>**20110201063017
+ Ignore-this: 8e79c3f6f80c81b4160a31e80e4ed29d
+] 
+[Add sizeof(Mutable)Array# primitives
+Daniel Peebles <pumpkingod@gmail.com>**20110126051554
+ Ignore-this: ae17d94dbb86d6e1ffa0a489da842f78
+] 
+[fix TRY_ACQUIRE_LOCK on Windows.
+Simon Marlow <marlowsd@gmail.com>**20110210150035
+ Ignore-this: b48713585b6d65020bb42f952c2c54ac
+] 
+[constant fold  (a + N) - M  and  (a - N) + M
+Simon Marlow <marlowsd@gmail.com>**20110210115608
+ Ignore-this: 312c33d5ff7d4288be8ab0a5c6939c0c
+] 
+[Recursively call cmmMachOpFold on divides that we turned into shifts
+Simon Marlow <marlowsd@gmail.com>**20110208104345
+ Ignore-this: bca0db454127c5f2b64b81d6200fc000
+ There might be more simplification to do.
+] 
+[Add unboxed tuple support to Template Haskell
+Ian Lynagh <igloo@earth.li>**20110210134528
+ Ignore-this: cf946570a9d16016debf8bccd21b2c79
+] 
+[Allow TH brackets to contain things of any kind
+Ian Lynagh <igloo@earth.li>**20110209184459
+ Ignore-this: b23f53d201abc874cf1f15a4eddb3abb
+ You can now quasi-quote things with unboxed types, and unboxed tuples.
+] 
+[Simpify constraints from a TH bracket eagerly
+simonpj@microsoft.com**20110209175003
+ Ignore-this: b341ea3d235af1b2e617107f238ae1d6
+ 
+ See Trac #4949, where having a TH bracket implication
+ was messing things up.  Better to get rid of it right away.
+] 
+[Typo in comment
+simonpj@microsoft.com**20110209174914
+ Ignore-this: 3590bf097a566c6f590a37cda2be9b4e
+] 
+[Call the final build system phase "final" rather than ""
+Ian Lynagh <igloo@earth.li>**20110207142046
+ Ignore-this: cc87cf202cff1f1d8b105268dacdd63f
+] 
+[Fix bug introduced in "Implement fuzzy matching for the Finder"
+Simon Marlow <marlowsd@gmail.com>**20110208090121
+ Ignore-this: 53e61080e7d7fb28f9187629fa20746a
+ The finder was reporting a hidden package when it meant a hidden
+ module, and vice versa (looks like a typo).
+] 
+[Fix Trac #4945: another SpecConstr infelicity
+simonpj@microsoft.com**20110207102537
+ Ignore-this: c3ffbb640cdbbab32758e6130ae803bc
+ 
+ Well, more a plain bug really, which led to SpecConstr
+ missing some obvious opportunities for specialisation.
+ 
+ Thanks to Max Bolingbroke for spotting this.
+] 
+[add missing initialisation of ws->todo_large_objects
+Simon Marlow <marlowsd@gmail.com>**20110204093148
+ Ignore-this: dc9a28f85aff97e0896d212d7b21ae30
+ Found-by: Valgrind.  Thanks Julian!
+] 
+[Add -XNondecreasingIndentation to -XHaskell98 for backwards compatibility.
+Simon Marlow <marlowsd@gmail.com>**20110204084226
+ Ignore-this: 42f7ef8bfbfb8d58f61afa217af3ffea
+ The final straw was when I learned today that Happy broke.
+] 
+[only the GHC repo is in git for now; add hoopl
+Simon Marlow <marlowsd@gmail.com>**20110203205705
+ Ignore-this: 1cf90e7e5b83aabef74ec5e24496464c
+] 
+[Fix typo in SpecConstr that made it not work at all
+simonpj@microsoft.com**20110203172756
+ Ignore-this: b550d5c5b73ed13709ee2938c80a750f
+ 
+ There was a terrible typo in this patch; I wrote "env"
+ instead of "env1".
+ 
+    Mon Jan 31 11:35:29 GMT 2011  simonpj@microsoft.com
+      * Improve Simplifier and SpecConstr behaviour
+ 
+ Anyway, this fix is essential to make it work properly.
+ Thanks to Max for spotting the problem (again).
+] 
+[fix compacting GC
+Simon Marlow <marlowsd@gmail.com>**20110202170036
+ Ignore-this: e78c99b318586a7fccc2a8e36d9fbf88
+] 
+[fix warning
+Simon Marlow <marlowsd@gmail.com>**20110202160415
+ Ignore-this: 99f65d20b38cce971b0eda6c53eab8d3
+] 
+[GC refactoring and cleanup
+Simon Marlow <marlowsd@gmail.com>**20110202154955
+ Ignore-this: 96b5b5ec97d49e69617d0007ee7fe804
+ Now we keep any partially-full blocks in the gc_thread[] structs after
+ each GC, rather than moving them to the generation.  This should give
+ us slightly better locality (though I wasn't able to measure any
+ difference).
+ 
+ Also in this patch: better sanity checking with THREADED.
+] 
+[avoid adding HPC ticks to arrow constructs (fixes #1333)
+Ross Paterson <ross@soi.city.ac.uk>**20110202211425
+ Ignore-this: 2938850ebbb53d1bc6bf0399f68dd8e5
+] 
+[Fix the profiling build
+Simon Marlow <marlowsd@gmail.com>**20110202132257
+ Ignore-this: cdf6de609c7eee47bd6c9e957276f12b
+] 
+[A small GC optimisation
+Simon Marlow <marlowsd@gmail.com>**20110202123049
+ Ignore-this: 4119e33b0f40787fd9339ad1104b3b9e
+ Store the *number* of the destination generation in the Bdescr struct,
+ so that in evacuate() we don't have to deref gen to get it.
+ This is another improvement ported over from my GC branch.
+] 
+[scheduleProcessInbox: use non-blocking acquire, and take the whole queue
+Simon Marlow <marlowsd@gmail.com>**20110202114907
+ Ignore-this: 12020d2751d355d1c006697351223d99
+ This is an improvement from my GC branch, that helps performance for
+ intensive message-passing communication between Capabilities.
+] 
+[do a bit of by-hand CSE
+Simon Marlow <marlowsd@gmail.com>**20110202114417
+ Ignore-this: c0c90cd767c74f3eee8b7f8cbc08dfa0
+] 
+[add a const
+Simon Marlow <marlowsd@gmail.com>**20110202114345
+ Ignore-this: d12300d69c91d7187aa1dd83a4a13ff9
+] 
+[add TRY_ACQUIRE_LOCK()
+Simon Marlow <marlowsd@gmail.com>**20110202113242
+ Ignore-this: face9da80ce407b9013d5f73bb65c34d
+] 
+[Remove the per-generation mutable lists
+Simon Marlow <marlowsd@gmail.com>**20110202112646
+ Ignore-this: 3e0cacbc8c8b6ddf7005d25b593d3357
+ Now that we use the per-capability mutable lists exclusively.
+] 
+[+RTS -qw hasn't done anything since 7.0.1; remove the implementation & docs
+Simon Marlow <marlowsd@gmail.com>**20110201163727
+ Ignore-this: e6c6ba6b8a119d87efcd79310b4fb5d2
+ It is still (silently) accepted for backwards compatibility.
+] 
+[comments
+Simon Marlow <marlowsd@gmail.com>**20110201085830
+ Ignore-this: 5a70e58a48aa60e5ed7afc6e908d150a
+] 
+[Annotate thread stop events with the owner of the black hole
+Simon Marlow <marlowsd@gmail.com>**20110127164226
+ Ignore-this: a60cbe5cc50da911d58020775c513ed0
+ 
+ So we can now get these in ThreadScope:
+ 
+   19487000: cap 1: stopping thread 6 (blocked on black hole owned by thread 4)
+ 
+ Note: needs an update to ghc-events.  Older ThreadScopes will just
+ ignore the new information.
+] 
+[update debugging code for fragmentation
+Simon Marlow <marlowsd@gmail.com>**20110125111011
+ Ignore-this: a98cd31d2e48ae9bdc52f9d96424ce39
+] 
+[Fix type checker error message
+simonpj@microsoft.com**20110201122920
+ Ignore-this: 7369cc5f8dae3d81621f580a8ddaf41e
+ 
+ See Trac #4940. We had a message
+      The lambda expression `\ x -> x' has one argument one argument,
+ repeating the "one argument" part.  Easy fix.
+] 
+[Some refactoring of SpecConstr
+simonpj@microsoft.com**20110201122841
+ Ignore-this: c2966091564a9ca4ceb27a9596d36b7d
+ 
+ This was originally to improve the case when SpecConstr generated a
+ function with an unused argument (see Trac #4941), but I ended up
+ giving up on that.  But the refactoring is still an improvement.
+ 
+ In particular I got rid of BothOcc, which was unused.
+] 
+[Don't make join points when the case has only one non-bottom alternative
+simonpj@microsoft.com**20110201122637
+ Ignore-this: 333b9b62debbfc1338530ef4e710ccbb
+ 
+ This fixes Trac #4930.  See Note [Bottom alternatives] in Simplify.lhs
+] 
+[Improve Simplifier and SpecConstr behaviour
+simonpj@microsoft.com**20110131113529
+ Ignore-this: e5b96c97cee0950e558ddf15178bb6c9
+ 
+ Trac #4908 identified a case where SpecConstr wasn't "seeing" a
+ specialisation it should easily get.  The solution was simple: see
+ Note [Add scrutinee to ValueEnv too] in SpecConstr.
+ 
+ Then it turned out that there was an exactly analogous infelicity in
+ the mighty Simplifer too; see Note [Add unfolding for scrutinee] in
+ Simplify. This fix is good for Simplify even in the absence of the
+ SpecConstr change.  (It arose when I moved the binder- swap stuff to
+ OccAnall, not realising that it *remains* valuable to record info
+ about the scrutinee of a case expression.  The Note says why.
+ 
+ Together these two changes are unconditionally good.  Better
+ simplification, better specialisation. Thank you Max.
+] 
+[fix warning
+Simon Marlow <marlowsd@gmail.com>**20110131135951
+ Ignore-this: e893d9bfbabf1601133a1e09c50b908
+] 
+[32-bit fix
+Simon Marlow <marlowsd@gmail.com>**20101013154200
+ Ignore-this: 7508977c263ed2cec321b40a8b5772a
+] 
+[update to mingw gcc 4.5.2
+Simon Marlow <marlowsd@gmail.com>**20110119135053
+ Ignore-this: b9d5cb736a48a0adc5e35eb8a0c191cd
+] 
+[count fizzled and GC'd sparks separately
+Simon Marlow <marlowsd@gmail.com>**20101111132727
+ Ignore-this: 4cb4b759aed06659b46cdf76e791e5c9
+] 
+[count "dud" sparks (expressions that were already evaluated when sparked)
+Simon Marlow <marlowsd@gmail.com>**20101101124143
+ Ignore-this: ca94824c0e75da0b3688300e7285c7e6
+] 
+[fix some shutdown memory leaks
+Simon Marlow <marlowsd@gmail.com>**20100820093133
+ Ignore-this: 3e7b80b5f4846d6c56319c150895953d
+] 
+[fix DEBUG build
+Simon Marlow <marlowsd@gmail.com>**20110131123433
+ Ignore-this: f2e009eaa66a14a7c8ec6acc7a4bbdb1
+] 
+[Fix formatting glitch in documentation
+simonpj@microsoft.com**20110128115400
+ Ignore-this: 6c410ed19956feac7e0cf68bb40b40b1
+] 
+[Fix warnings
+Simon Marlow <marlowsd@gmail.com>**20110128103639
+ Ignore-this: aa7f2c9f9b91f9dabc7b5d5ea26121fd
+] 
+[Merge in new code generator branch.
+Simon Marlow <marlowsd@gmail.com>**20110124121650
+ Ignore-this: 7762f21082cb84ec94daaeefd70f5ef2
+ This changes the new code generator to make use of the Hoopl package
+ for dataflow analysis.  Hoopl is a new boot package, and is maintained
+ in a separate upstream git repository (as usual, GHC has its own
+ lagging darcs mirror in http://darcs.haskell.org/packages/hoopl).
+ 
+ During this merge I squashed recent history into one patch.  I tried
+ to rebase, but the history had some internal conflicts of its own
+ which made rebase extremely confusing, so I gave up. The history I
+ squashed was:
+ 
+   - Update new codegen to work with latest Hoopl
+   - Add some notes on new code gen to cmm-notes
+   - Enable Hoopl lag package.
+   - Add SPJ note to cmm-notes
+   - Improve GC calls on new code generator.
+ 
+ Work in this branch was done by:
+    - Milan Straka <fox@ucw.cz>
+    - John Dias <dias@cs.tufts.edu>
+    - David Terei <davidterei@gmail.com>
+ 
+ Edward Z. Yang <ezyang@mit.edu> merged in further changes from GHC HEAD
+ and fixed a few bugs.
+] 
+[Fix an egregious strictness analyser bug (Trac #4924)
+simonpj@microsoft.com**20110128080748
+ Ignore-this: 3bf533c3d30b45a8e78b1fec3d9634f
+ 
+ The "virgin" flag was being threaded rather than treated
+ like an environment.  As a result, the second and subsequent
+ recursive definitions in a module were not getting a
+ correctly-initialised fixpoint loop, causing much worse
+ strictness analysis results.  Indeed the symptoms in
+ Trac #4924 were quite bizarre.
+ 
+ Anyway, it's easily fixed.  Merge to stable branch.
+] 
+[Refine incomplete-pattern checks (Trac #4905)
+simonpj@microsoft.com**20110127131304
+ Ignore-this: cf2e0852f20d1cadc6a2cba4272838f6
+ 
+ The changes are:
+ 
+ * New flag -fwarn-incomplete-uni-patterns, which checks for
+   incomplete patterns in (a) lambdas, (b) pattern bindings
+ 
+ * New flag is not implied by -W or -Wall (too noisy; and many
+   libraries use incomplete pattern bindings)
+ 
+ * Actually do the incomplete-pattern check for pattern bindings
+   (previously simply omitted)
+ 
+ * Documentation for new flag
+] 
+[Fix "make 1" etc following the build system changes
+Ian Lynagh <igloo@earth.li>**20110127001739
+ Ignore-this: 7ae0a41f2753d7740569f362a97ea5fb
+ The logic is now in mk/compiler-ghc.mk rather than being duplicated in
+ ghc/Makefile and compiler/Makefile.
+] 
+[Fix vectorisation of recursive types
+Roman Leshchinskiy <rl@cse.unsw.edu.au>**20110126231843
+ Ignore-this: 983fc42a659be2e085da9b16f994aa2e
+] 
+[Fix dependencies among specialisations for imported Ids
+simonpj@microsoft.com**20110126172112
+ Ignore-this: 364e09c11affe7bfe8f1b934ea28bbb6
+ 
+ This was a subtle one (Trac #4903).  See
+   Note [Glom the bindings if imported functions are specialised]
+ in Speclialise.
+ 
+ Fundamentally, a specialised binding for an imported Id was being
+ declared non-recursive, whereas in fact it can become recursive
+ via a RULE.  Once it's specified non-recurive the OccAnal pass
+ treats that as gospel -- and that in turn led to infinite inlining.
+ 
+ Easily fixed by glomming all the specialised bindings in a Rec;
+ now the OccAnal will sort them out correctly.
+] 
+[Fix bug in roughTopNames
+simonpj@microsoft.com**20110126171803
+ Ignore-this: eca8b144162f1bd94e2ccb433bca1e02
+ 
+ roughTopNames was returning a name that in fact might be
+ "looked though" by the rule matcher. Result: a rule
+ that should match was being pre-emptively discarded.
+ 
+ See Note [Care with roughTopName].
+ 
+ Fixes a bug noticed by Pedro (Trac #4918).
+] 
+[Comments only, plus a tiny bit of debug printing
+simonpj@microsoft.com**20110126171255
+ Ignore-this: f84364b2b90fc860e9289dd40d0395ac
+] 
+[Comments only
+simonpj@microsoft.com**20110126171235
+ Ignore-this: 79059977f82aaac7f9714ad09e820ea9
+] 
+[Look through type synonyms when computing orphans
+simonpj@microsoft.com**20110126171229
+ Ignore-this: 6dfc45dae3a94cdb0022b2d21d6e09f6
+ 
+ I renamed functions tyClsNamesOfTypes to oprhNamesOfType,
+ because it's only used in that capacity, and we therefore
+ want to look through type synonyms.  Similarly exprOrphNames.
+ 
+ This fixes Trac #4912.
+] 
+[Bleat a bit more informatively in unionLists
+simonpj@microsoft.com**20110126171030
+ Ignore-this: 80b276aa3d7971c6d7802b5f6b522d2e
+] 
+[Keep separate linker flags, for when we want to link with gcc or ld
+Ian Lynagh <igloo@earth.li>**20110124233121] 
+[Fix validate on OS X 64
+Ian Lynagh <igloo@earth.li>**20110124183618] 
+[Split main/GHC into GHC and GhcMake
+simonpj@microsoft.com**20110125161632
+ Ignore-this: 502ea034de77ecd81173161836d78287
+ 
+ There are two things going on in main/GHC.hs.
+   * It's the root module of the GHC package
+   * It contains lots of stuff for --make
+ It is also gigantic (2.7k lines)
+ 
+ This patch splits it into two
+   * GHC.hs is the root module for the GHC package
+       (1.3k lines)
+   * GhcMake.hs contains the stuff for --make
+       (1.4k lines)
+ 
+ Happily the functional split divided it almost
+ exactly in half.
+ 
+ This is a pure refactoring.  There should be no 
+ behavioural change.
+] 
+[Comments only
+simonpj@microsoft.com**20110125131115
+ Ignore-this: 7ec4e97a481d06894de940aba59c575d
+] 
+[Fix Trac #3717 by making exprOkForSpeculation a bit cleverer
+simonpj@microsoft.com**20110125110525
+ Ignore-this: 13b606b05da69c29bf53aaf408fd602
+ 
+ The main change here is to do with dropping redundant seqs.
+ See Note [exprOkForSpeculation: case expressions] in CoreUtils.
+] 
+[Improve dataToTag# magic
+simonpj@microsoft.com**20110125110418
+ Ignore-this: 11fdb265e030dec4d5b13ed6b16c9761
+ 
+ dataToTag# is a bit unsatisfactory because it requires
+ its argument to be evaluated, and we don't have a good
+ way to enforce that. This patch adds some comments, and
+ makes exprOkForSpeculation a bit less picky in the case
+ of dataToTag# (since the argument may, in fact, not be
+ eval'd).
+] 
+[Fix Trac #4917: try a bit harder to unify on-the-fly
+simonpj@microsoft.com**20110125110112
+ Ignore-this: e96e0a19ab8517d4ba648efe91f6b379
+ 
+ This is generally a modest improvement but, more important,
+ it fixes a "unify-under-forall" problem.  See Note [Avoid deferring].
+ 
+ There's still a lurking unsatisfactory-ness in that we can't
+ defer arbitrary constraints that are trapped under a forall.
+] 
+[DPH options updated
+Manuel M T Chakravarty <chak@cse.unsw.edu.au>**20110124043617
+ Ignore-this: 6b7d2949b75f9c923f279c1178d2d042
+ - '-Odph' is now '-O2 -fsimplifier-phases=3 -fsimplifier-iterations=20'
+ - The new option '-fdph-none' is the default; it indicates that no DPH
+   backend is selected and is the only valid option if the DPH libraries
+   are not installed.  If vectorisation is attempted with -fdph-none a
+   suitable error message is generated.
+ - Hence, '-fdph-par' (or '-fdph-seq') needs to be explicitly selected
+   when using vectorisation and when linking vectorised code.  (There
+   seems to be no elegant way to avoid that.)
+] 
+[Add build system profiling to build system
+Ian Lynagh <igloo@earth.li>**20110123151408
+ Ignore-this: 75717810be32d60323980f9fd1baa853
+] 
+[Fix ghci in stage3
+Ian Lynagh <igloo@earth.li>**20110123120232] 
+[Remove use of non-existent $$(dir) variable in the rts ghc.mk
+Ian Lynagh <igloo@earth.li>**20110123021815] 
+[Add some missing dependencies
+Ian Lynagh <igloo@earth.li>**20110123004208] 
+[Tweak some deps to avoid multiple $(wildcard ...)s
+Ian Lynagh <igloo@earth.li>**20110123001045
+ Ignore-this: 38e53cb6f6b4f27c771ae0ed341f8958
+ Note that some things depending on the rts/includes header files now
+ depend on more files: They used to include depend on includes/*.h, but
+ now they also depend on header files in subdirectories. As far as I can
+ see this was a bug.
+] 
+[Use := when assigning the result of $(wildcard ...)
+Ian Lynagh <igloo@earth.li>**20110122224532
+ Ignore-this: 67e2ca2ffbcffb5b7f55bd60c17fc6cf
+ Avoids repeated evaluations of things that need system calls etc
+] 
+[Simplify the build system, and remove 2 phases
+Ian Lynagh <igloo@earth.li>**20110122190928
+ Ignore-this: 7b6184088befcbc44ea47b2f4abf85a9
+ From
+     http://hackage.haskell.org/trac/ghc/wiki/Building/Architecture/Idiom/PhaseOrdering
+ 
+ Phase 0:
+     Includes: package-data.mk files for things built by the
+               bootstrapping compiler.
+     Builds:   the dependency files for hsc2hs and genprimopcode. We need
+               to do this now, as hsc2hs needs to be buildable in phase 1's
+               includes (so that we can make the hpc library's .hs source
+               files, which in turn is necessary for making its dependency
+               files), and genprimopcode needs to be buildable in phase 1's
+               includes (so that we can make the primop-*.hs-incl files,
+               which are sources for the stage1 compiler library, and thus
+               necessary for making its dependency files).
+ Phase 1:
+     Includes: dependency files for things built by the bootstrapping
+               compiler.
+     Builds:   package-data.mk files for everything else. Note that this
+               requires configuring the packages, which means telling cabal
+               which ghc to use, and thus the stage1 compiler gets built
+               during this phase. 
+ Phase "":
+     Includes: dependency files for everything else.
+     Builds:   Everything else. 
+] 
+[Manually control more of the Cabal flags for the compiler and ghc packages
+Ian Lynagh <igloo@earth.li>**20110121230552
+ Ignore-this: 652b5f6327d246d7e2e47acbca614df2
+ For some reason the Windows HEAD builder has started thinking the ghci
+ flag should be on in stage 1. This should fix it, and generally make
+ things a little more resilient.
+] 
+[Remove some hardcoded makefile settings
+Ian Lynagh <igloo@earth.li>**20110121230245
+ Ignore-this: 6b1b68aebdfbe02c15518985d2ea7559
+ Now that we used cabal to configure the ghc-bin package they are no
+ longer needed.
+] 
+[tweak newArray# documentation again
+Simon Marlow <marlowsd@gmail.com>**20110119140633
+ Ignore-this: ceee33428dbad7e0f5eabfa0a2590466
+] 
+[Fix OSTYPE test
+Ian Lynagh <igloo@earth.li>**20110120000308
+ Ignore-this: 8fa5d5c03297cb507a166bd85675145c
+] 
+[Comments only
+simonpj@microsoft.com**20110119222247
+ Ignore-this: ea531428e9093ecedb895735ed537791
+] 
+[Add OSTYPE build-system variable, and use it
+simonpj@microsoft.com**20110113155023
+ Ignore-this: c4a75f0bb27a680924e57ca7075ec116
+ 
+ The use is in install.mk.in, where we need to know when
+ we're on Cygwin.
+ 
+ This fixes the build on my Windows box, where I have
+ both Msys and Cygwin.
+] 
+[Remove an extraneous comma that stopped ghc-cabal from building
+Ian Lynagh <igloo@earth.li>**20110119222359] 
+[Move some make variables around
+Ian Lynagh <igloo@earth.li>**20110119221545
+ Ignore-this: c57c93f39d72c3baef7c5f466861dd5b
+] 
+[Remove a debugging 'info'
+Ian Lynagh <igloo@earth.li>**20110119203305
+ Ignore-this: ea912ba205eaae1d2bcf0cce7c13628d
+] 
+[Move the PACKAGE_MAGIC evaluation inside package-data.mk
+Ian Lynagh <igloo@earth.li>**20110119203229
+ Ignore-this: 497c4e83ae75089c24d6c794c4e2891f
+] 
+[Fix libraries/index.html's haddock dependency on Windows
+Ian Lynagh <igloo@earth.li>**20110119172310] 
+[Add configure phases for the stage 3 compiler
+Ian Lynagh <igloo@earth.li>**20110119130629] 
+[Include kfreebsdgnu in the list of Target Platforms.
+Marco Silva <marcot@marcot.eti.br>**20110118222352
+ Ignore-this: 759482baf33903b98cd837636a3f5328
+] 
+[Fix documentation bug: newArray# accepts word count, not byte count.
+Edward Z. Yang <ezyang@mit.edu>**20110118221834
+ Ignore-this: 8daab134bf72a740b89d273fb4e983d5
+] 
+[Update the location of libffi.dll.a
+Ian Lynagh <igloo@earth.li>**20110118164225
+ As far as I can see this has been wrong for some time, but only bit
+ recently.
+] 
+[Update the generics docs; pointed out by Christian Maeder
+Ian Lynagh <igloo@earth.li>**20110117214632] 
+[ghc-cabal now adds the language flag being used
+Ian Lynagh <igloo@earth.li>**20110117184833
+ Ignore-this: 8198892ef7f8009561d3181425cde942
+ This means we get -XHaskell98 added to the list of flags, just like we
+ would if we were building with Cabal.
+] 
+[Reinstate the OS X flags in the LDFLAGS etc variables
+Ian Lynagh <igloo@earth.li>**20110117200540
+ Ignore-this: 9261baa1843100f65b02fb91c1a0d225
+ I expect this will fix:
+ http://www.haskell.org/pipermail/cvs-ghc/2011-January/059098.html
+] 
+[Add NondecreasingIndentation extension to ghc-bin
+Ian Lynagh <igloo@earth.li>**20110117200427
+ Ignore-this: b6b029ee6dfbda482c91d17e835f9000
+] 
+[Change an "if ... else return ()" into a "when"
+Ian Lynagh <igloo@earth.li>**20110117191714
+ Ignore-this: 7de58b728e4fce7f86d7d24a3089e6c7
+] 
+[Add NondecreasingIndentation to the list of extensions in ghc-pkg
+Ian Lynagh <igloo@earth.li>**20110117190610
+ Ignore-this: 20ce8144b7b64d1f67de2f6983717da3
+] 
+[Add NondecreasingIndentation to the list of extensions in the ghc package
+Ian Lynagh <igloo@earth.li>**20110117190404
+ Ignore-this: 516b45e93c1b3bbb66da5414d9aabef1
+] 
+[Fix deps on the ghc package
+Ian Lynagh <igloo@earth.li>**20110117173010
+ The standard libraries/$depname scheme doesn't apply, so we need to
+ handle it specially.
+] 
+[Tidy up gmp cleaning
+Ian Lynagh <igloo@earth.li>**20110117121155
+ Ignore-this: 61d9a57d14b70732f62d6b2c8d6d197a
+] 
+[Remove redundant libraries/cabal-bin.hs
+Ian Lynagh <igloo@earth.li>**20110116194919
+ Ignore-this: 13b4a8d26fa06ec952351603c3bb40ee
+] 
+[Turn off dtrace unless you override USE_DTRACE
+Ian Lynagh <igloo@earth.li>**20110116180306
+ Ignore-this: beafc2002091fa7f0e66666004c870a5
+ There are problems with dtrace on 64bit 10.5. For now at least, we
+ just turn dtrace off unless you override USE_DTRACE
+] 
+[Simplify a bit of makefile
+Ian Lynagh <igloo@earth.li>**20110116175218
+ Ignore-this: 18f02e40e36eca2e2cab79c152c72541
+] 
+[Tweak Windows phase ordering
+Ian Lynagh <igloo@earth.li>**20110116173459
+ Ignore-this: bb8a70741be4574edc149349acd0f4be
+] 
+[Handle dependencies of programs on libraries correctly
+Ian Lynagh <igloo@earth.li>**20110116155627] 
+[It's not clear if LDFLAGS flags will be given to gcc or ld,
+Ian Lynagh <igloo@earth.li>**20110116151230
+ Ignore-this: a6a2d0b1f550c922c32f6f252e4e3285
+ and they accept different flags, so for now do nothing
+] 
+[Fix cross-package dependency generation on Windows
+Ian Lynagh <igloo@earth.li>**20110116150901
+ Ignore-this: f78baaa7074ca36a6a4ff8a7e6f2e35
+] 
+[Add some Windows-only CONFIGURE_PHASEs
+Ian Lynagh <igloo@earth.li>**20110116150826
+ Ignore-this: abf1bf498609107eb206b22d483613de
+] 
+[Simplify, and future-proof, a dependency in the build system
+Ian Lynagh <igloo@earth.li>**20110116020035
+ Ignore-this: d089133430828d041b3601b1e9c8b22a
+] 
+[Remove an unnecessary phase, and some unnecessary deps
+Ian Lynagh <igloo@earth.li>**20110116015943
+ Ignore-this: e649b072d006db5db97aee26d3753f65
+ now that cross-package deps are tracked correctly.
+] 
+[We can now pass -include-pkg-deps to the bootstrapping compiler
+Ian Lynagh <igloo@earth.li>**20110116015714
+ Ignore-this: bdfed941124bb93111f117800be5f2d8
+] 
+[Remove some flags that are redundant now GHC gets configured by Cabal
+Ian Lynagh <igloo@earth.li>**20110116003154
+ Ignore-this: 43a023c5103b72c91d53cf3bed7a4c50
+] 
+[Change some HC_OPTS var handling
+Ian Lynagh <igloo@earth.li>**20110116003104
+ Ignore-this: 629f4a3d37028f71a477c22ed4e8591e
+ In particular, this means ghc gets built with -rtsopt, -threaded, etc again.
+] 
+[Remove some unnecessary workarounds
+Ian Lynagh <igloo@earth.li>**20110116002803
+ Ignore-this: 5ecc62f765522c08c44aa0814c5b840e
+ We can now rely on cross-package deps working properly, as we require
+ GHC 6.12.
+] 
+[Tidy up a bit
+Ian Lynagh <igloo@earth.li>**20110116001121
+ Ignore-this: a2baabc6da0cf2877507b7833d5b0fc7
+] 
+[Build system improvements
+Ian Lynagh <igloo@earth.li>**20110115231927
+ Ignore-this: 92ea6514addc8aa8734d7e0eb61b50cb
+ We no longer use dummy-ghc; instead we don't configure most packages
+ until the stage1 compiler is available.
+   
+ We also now use Cabal for building the ghc-bin package.
+ 
+ There are a couple more sanity checks too.
+] 
+[Whitespace tweak
+Ian Lynagh <igloo@earth.li>**20110115214149
+ Ignore-this: 3e564566f311be473e94f6af609bdeaa
+] 
+[Fix libffi build rules
+Ian Lynagh <igloo@earth.li>**20110115202104
+ Ignore-this: 57e1763d2079301b0165be7deba29c85
+ Fixes a rare race when both libHSffi.a and libHSffi_p.a were being built
+ at the same time:
+ 
+ "cp" libffi/dist-install/build/libffi.a libffi/dist-install/build/libHSffi.a
+ "cp" libffi/dist-install/build/libffi.a libffi/dist-install/build/libHSffi.a
+ "cp" libffi/dist-install/build/libffi.so libffi/dist-install/build/libHSffi-ghc7.1.20110115.so
+ cp: cannot create regular file `libffi/dist-install/build/libHSffi.a': File exists
+] 
+[Fix Trac #4874: specialisation of INLINABLE things
+simonpj@microsoft.com**20110114163227
+ Ignore-this: b90543117ebddaf3bbeeaf0af0c18699
+ 
+ Johan discovered that when INLINABLE things are specialised
+ bad things can happen. This patch implements a hack -- but
+ it's a simple hack and it solves the problem.
+ 
+ See Note [Inline specialisations]. 
+ 
+ The hack part is that really INLINABLE should not cause *any* loss
+ optimisation, and it does; see Note [Don't w/w INLINABLE things] in
+ WorkWrap.
+] 
+[Comments only
+simonpj@microsoft.com**20110114162959
+ Ignore-this: f76d4d8f527c3fcd2598ec8cc5fd3049
+] 
+[Fix a buglet in postInlineUnconditionally
+simonpj@microsoft.com**20110114162927
+ Ignore-this: 7a7b8610ef863907843d4ae36a8a1a3c
+ 
+ Under obscure circumstances (actually only shown up when fixing something
+ else) it was possible for a variable binding to be discarded although
+ it was still used.  See Note [Top level and postInlineUnconditionally]
+] 
+[cope with empty libraries/stamp directory (in git repo)
+Simon Marlow <marlowsd@gmail.com>**20110114142406
+ Ignore-this: 6e95c44368d784f86a0c1c1d1e24d810
+] 
+[add .gitignore
+Simon Marlow <marlowsd@gmail.com>**20110114142353
+ Ignore-this: 23d7cabd2b04eedfe4c33ad94a120474
+] 
+[Fix longstanding bug in C-- inlining for functions calls.
+Edward Z. Yang <ezyang@mit.edu>**20110113130654
+ Ignore-this: 79001003b1f3cc5005207ccfed980c21
+] 
+[fix for remote repos without -r
+Simon Marlow <marlowsd@gmail.com>**20110113131147
+ Ignore-this: 3ddd8a4c616cad01a2dbdb500fb54279
+] 
+[add a version of packages that stores all the repos in git
+Simon Marlow <marlowsd@gmail.com>**20110113111733
+ Ignore-this: fcca2eb2e753ee20bb5abce7f30f5205
+] 
+[add the -r flag from darcs-all
+Simon Marlow <marlowsd@gmail.com>**20110113111654
+ Ignore-this: ada88377bd95ebb9c668dd48954f321e
+] 
+[Make Template Haskell classInstances function return [ClassInstance]
+simonpj@microsoft.com**20110113111421
+ Ignore-this: d14381f0a94170965414dd8724188356
+ 
+ This is a recently-introduce function, which was returning
+ a [Name], being the names of the dfuns.  But what you really
+ want (obviously!) is the ClassInstances, and we have a TH type
+ for that.
+ 
+ This is an API change, so don't merge into GHC 7.0.  But it's
+ a new part of TH which is still settling down.
+ 
+ Fixes Trac #4863.
+] 
+[Improve the finder's error messages
+simonpj@microsoft.com**20110113111233
+ Ignore-this: ec4819b0a44af9fd03dc0a8b8e13699d
+ 
+ I'd done all the work to add fuzzy-match suggestions, but they
+ weren't really being used!  Here's what you get now
+ 
+    module Foo where
+     import Data.Lst
+ 
+ Foo.hs:3:1:
+     Failed to load interface for `Data.Lst'
+     Perhaps you meant
+       Data.List (from base)
+       Data.List (needs flag -package haskell2010-1.0.0.0)
+       Data.Int (needs flag -package haskell2010-1.0.0.0)
+     Use -v to see a list of the files searched for.
+] 
+[White space only
+simonpj@microsoft.com**20110113093931
+ Ignore-this: 4e46acca5241615a3283996052a634a
+] 
+[Produce an error message, not a crash, for HsOpApp with non-var operator
+simonpj@microsoft.com**20110112170719
+ Ignore-this: df0f6f2e3318f9c33a714609019b0262
+ 
+ Fixes Trac #4877.
+] 
+[update to work with current packages file format
+Simon Marlow <marlowsd@gmail.com>**20110112160224
+ Ignore-this: da73498734aadbfbf0a31389a9dc44d
+] 
+[In configure, test that GHC generates code for the correct platform (#4819)
+Simon Marlow <marlowsd@gmail.com>**20110107163541
+ Ignore-this: 29541d3896f9c9bcf791510edae70254
+ Patch supplied by the bug reporter, tidied up by me.
+ 
+ $ ./configure --with-ghc=$HOME/fp/bin/i386-unknown-linux/ghc --build=x86_64-unknown-linux
+ checking for gfind... no
+ checking for find... /usr/bin/find
+ checking for sort... /usr/bin/sort
+ checking for GHC version date... inferred 7.1.20110107
+ checking version of ghc... 7.0.1
+ checking build system type... x86_64-unknown-linux-gnu
+ checking host system type... x86_64-unknown-linux-gnu
+ checking target system type... x86_64-unknown-linux-gnu
+ Host platform inferred as: i386-unknown-linux
+ Target platform inferred as: i386-unknown-linux
+ This GHC (/home/simonmar/fp/bin/i386-unknown-linux/ghc) does not generate code for the build platform
+    GHC target platform    : i386-unknown-linux
+    Desired build platform : x86_64-unknown-linux
+] 
+[Major refactoring of the type inference engine
+simonpj@microsoft.com**20110112145604
+ Ignore-this: 6a7fc90c9b798e89505606726cc8090e
+ 
+ This patch embodies many, many changes to the contraint solver, which
+ make it simpler, more robust, and more beautiful.  But it has taken
+ me ages to get right. The forcing issue was some obscure programs
+ involving recursive dictionaries, but these eventually led to a
+ massive refactoring sweep.
+ 
+ Main changes are:
+  * No more "frozen errors" in the monad.  Instead "insoluble
+    constraints" are now part of the WantedConstraints type.
+ 
+  * The WantedConstraint type is a product of bags, instead of (as
+    before) a bag of sums.  This eliminates a good deal of tagging and
+    untagging.
+ 
+  * This same WantedConstraints data type is used
+      - As the way that constraints are gathered
+      - As a field of an implication constraint
+      - As both argument and result of solveWanted
+      - As the argument to reportUnsolved
+ 
+  * We do not generate any evidence for Derived constraints. They are
+    purely there to allow "impovement" by unifying unification
+    variables.
+ 
+  * In consequence, nothing is ever *rewritten* by a Derived
+    constraint.  This removes, by construction, all the horrible
+    potential recursive-dictionary loops that were making us tear our
+    hair out.  No more isGoodRecEv search either. Hurrah!
+ 
+  * We add the superclass Derived constraints during canonicalisation,
+    after checking for duplicates.  So fewer superclass constraints
+    are generated than before.
+ 
+  * Skolem tc-tyvars no longer carry SkolemInfo.  Instead, the
+    SkolemInfo lives in the GivenLoc of the Implication, where it
+    can be tidied, zonked, and substituted nicely.  This alone is
+    a major improvement.
+ 
+  * Tidying is improved, so that we tend to get t1, t2, t3, rather
+    than t1, t11, t111, etc
+ 
+    Moreover, unification variables are always printed with a digit
+    (thus a0, a1, etc), so that plain 'a' is available for a skolem
+    arising from a type signature etc. In this way,
+      (a) We quietly say which variables are unification variables,
+          for those who know and care
+      (b) Types tend to get printed as the user expects.  If he writes
+              f :: a -> a
+              f = ...blah...
+          then types involving 'a' get printed with 'a', rather than
+          some tidied variant.
+ 
+  * There are significant improvements in error messages, notably
+    in the "Cannot deduce X from Y" messages.
+] 
+[Fix installation on cygwin
+Ian Lynagh <igloo@earth.li>**20110111194838
+ Ignore-this: fe923d0619da3bd3a34968106c92fdab
+] 
+[Do dependency analysis when kind-checking type declarations
+simonpj@microsoft.com**20110110110351
+ Ignore-this: 17a8dee32694d3e1835cf7bb02d3abb5
+ 
+ This patch fixes Trac #4875.  The main point is to do dependency
+ analysis on type and class declarations, and kind-check them in
+ dependency order, so as to improve error messages.
+ 
+ This patch means that a few programs that would typecheck before won't
+ typecheck any more; but before we were (naughtily) going beyond
+ Haskell 98 without any language-extension flags, and Trac #4875
+ convinces me that doing so is a Bad Idea.
+ 
+ Here's an example that won't typecheck any more
+        data T a b = MkT (a b)
+        type F k = T k Maybe
+ 
+ If you look at T on its own you'd default 'a' to kind *->*;
+ and then kind-checking would fail on F.
+ 
+ But GHC currently accepts this program beause it looks at
+ the *occurrences* of T.
+] 
+[Move imports around (no change in behaviour)
+simonpj@microsoft.com**20110110105647
+ Ignore-this: d618cabbc52be7d7968de1e0bdd44082
+] 
+[Make fuzzy matching a little less eager for short identifiers
+simonpj@microsoft.com**20110107102855
+ Ignore-this: a753643e88433d74b44a480cc0f4170c
+ 
+ For single-character identifiers we now don't make any suggestions
+ See comments in Util.fuzzyLookup
+] 
+[Fix Trac #4870: get the inlining for an imported INLINABLE Id
+simonpj@microsoft.com**20110105002712
+ Ignore-this: 60c0192eb48590c2e6868d15ba8f84ce
+ 
+ We need the unfolding even for a *recursive* function (indeed
+ that's the point) and I was using the wrong function to get it
+ (idUnfolding rather than realIdUnfolding).
+] 
+[Rejig the includes/ installation rules
+Ian Lynagh <igloo@earth.li>**20110109181158
+ They're a little nicer now, and a regression in the cygwin build is
+ fixed (the $i in the destination wasn't surviving being passed through
+ cygpath).
+] 
+[Make DESTDIR an absolute path when installing; fixes #4883
+Ian Lynagh <igloo@earth.li>**20110108171635] 
+[Add utils/ghc-cabal/Makefile
+Ian Lynagh <igloo@earth.li>**20110108144049] 
+[Remove redundant import
+Ian Lynagh <igloo@earth.li>**20110108130047
+ Ignore-this: 1c7fdec77b48319c845c9593b5fb94af
+] 
+[Improve error message of :set in ghci (ticket #4190).
+Michal Terepeta <michal.terepeta@gmail.com>**20101130211505
+ Ignore-this: ccc8a0816a900ba8c4a966285a465b23
+] 
+[Improve error message when importing data constructors (ticket #4058).
+Michal Terepeta <michal.terepeta@gmail.com>**20101127211338
+ Ignore-this: 3289a08f0391dd90dfef2e0403a04ccd
+] 
+[catch SIGTSTP and save/restore terminal settings (#4460)
+Simon Marlow <marlowsd@gmail.com>**20110107124042
+ Ignore-this: 38f7f27bf75178899f466404c048241d
+ As far as I can tell, it is the responsibility of the program to save
+ and restore its own terminal settings across a suspend/foreground, the
+ shell doesn't do it (which seems odd).  So I've added a signal handler
+ for SIGTSTP to the RTS which will save and restore the terminal
+ settings iff we modified them with hSetBuffering or hSetEcho (we
+ already restore them at exit time in these cases).
+] 
+[comment updates
+Simon Marlow <marlowsd@gmail.com>**20110107094236
+ Ignore-this: c2b30b0c98645e2847a2749c7fdc167f
+] 
+[On Cygwin, use a Cygwin-style path for /bin/install's destination
+Ian Lynagh <igloo@earth.li>**20110106223030
+ 
+ cygwin's /bin/install doesn't set file modes correctly if the
+ destination path is a C: style path:
+ 
+ $ /bin/install -c -m 644 foo /cygdrive/c/cygwin/home/ian/foo2
+ $ /bin/install -c -m 644 foo c:/cygwin/home/ian/foo3
+ $ ls -l foo*
+ -rw-r--r-- 1 ian None 0 2011-01-06 18:28 foo
+ -rw-r--r-- 1 ian None 0 2011-01-06 18:29 foo2
+ -rwxrwxrwx 1 ian None 0 2011-01-06 18:29 foo3
+ 
+ This causes problems for bindisttest/checkBinaries.sh which then
+ thinks that e.g. the userguide HTML files are binaries.
+ 
+ We therefore use a /cygdrive path if we are on cygwin
+] 
+[Fix mkUserGuidePart program name on Windows
+Ian Lynagh <igloo@earth.li>**20110106143707] 
+[add comment to remind people to update driver/gcc/gcc.c
+Simon Marlow <marlowsd@gmail.com>**20110106152402
+ Ignore-this: c07d7ac11eb9221ef821f78aab1807cb
+] 
+[use Win32 CreateProcess() rather than mingw spawnv() (#4531)
+Simon Marlow <marlowsd@gmail.com>**20110106133834
+ Ignore-this: 4c0947853549dad034622c044391af6c
+] 
+[update paths now that we upgraded gcc to 4.5.0
+Simon Marlow <marlowsd@gmail.com>**20110106133729
+ Ignore-this: f8f9bcad984fdd472e0ae958b66bea9d
+] 
+[fix markup
+Simon Marlow <marlowsd@gmail.com>**20110106093152
+ Ignore-this: 555b6e39ae6b5a177b03c5edffc169ab
+] 
+[fix up multi-line GHCi patch (#4316)
+Simon Marlow <marlowsd@gmail.com>**20110105154548
+ Ignore-this: 53d5d489bd2a792c01f2cc56a11f3ce6
+] 
+[multiline commands in GHCi #4316
+Vivian McPhail <haskell.vivian.mcphail@gmail.com>**20101105051308
+ This patch adds support for multiline commands in GHCi.
+ 
+ The first line of input is lexed.  If there is an active
+ layout context once the lexer reaches the end of file, the
+ user is prompted for more input.
+ 
+ Multiline input is exited by an empty line and can be escaped 
+ with a user interrupt.
+ 
+ Multiline mode is toggled with `:set +m`
+] 
+[Replace a #if with a Haskell conditional
+Ian Lynagh <igloo@earth.li>**20110105183011
+ Ignore-this: f08f3a4356586efab2725ad8704b2eba
+] 
+[Whitespace only in X86.Ppr
+Ian Lynagh <igloo@earth.li>**20110105171124] 
+[Fix error compiling AsmCodeGen.lhs for PPC Mac (unused makeFar addr)
+naur@post11.tele.dk**20101219213555
+ Ignore-this: ab25d5f2e2ebe163547d5babaf4b1dbf
+] 
+[Define cTargetArch and start to use it rather than ifdefs
+Ian Lynagh <igloo@earth.li>**20110104220013
+ Using Haskell conditionals means the compiler sees all the code, so
+ there should be less rot of code specific to uncommon arches. Code
+ for other platforms should still be optimised away, although if we want
+ to support targetting other arches then we'll need to compile it
+ for-real anyway.
+] 
+[Fix error compiling AsmCodeGen.lhs for PPC Mac (rtsPackageId)
+naur@post11.tele.dk**20101219212530
+ Ignore-this: 946f6d3e0d3c3ddf2dc07b85e1f82d85
+] 
+[Rename the c*Platform variables to c*PlatformString
+Ian Lynagh <igloo@earth.li>**20110104210250] 
+[Fix #4829 (build does not respect --with-gcc option)
+gwright@antiope.com**20101221133233
+ Ignore-this: 37918feb82f911c2beb75915b6e8b97b
+ 
+ This patch fixes what seems to be the last problem with the --with-gcc
+ option.  On OS X, we need to pass the path to gcc to dtrace as the
+ preprocessor.  (Internally, dtrace on OS X sets the default preprocessor
+ to /usr/bin/gcc.)  ATM, dtrace is only supported on OS X, so we don't
+ need any conditionalization.  If dtrace is ported to other platforms,
+ we might need to change this. However, usage on other platforms will
+ probably be similar to OS X, since many of Apple's changes are to
+ use the gnu toolchain instead of the Sun toolchain.
+   
+] 
+[Drop a seven years old workaround for happy
+Matthias Kilian <kili@outback.escape.de>**20101231192343
+ Ignore-this: a9348c91292c113bd967464fbe859f1f
+] 
+[Add gcc and ld flags to --info output
+Ian Lynagh <igloo@earth.li>**20101220173520] 
+[Fix Trac #4525: report type errors in terms of the immediate type synonym
+simonpj@microsoft.com**20101224082520
+ Ignore-this: a3bd076bfe0e1c6f575b106f77f326c6
+ 
+ This small change means that if you have
+      type Age = Int
+ and you try to unify Age and Bool, you'll get a complaint about
+ not matching Age and Bool, rather than Int and Bool.  See the notes
+ with Trac #4525
+] 
+[Comments only
+simonpj@microsoft.com**20101224082310
+ Ignore-this: 1f69fa3244663b653607093efcdf7b0
+] 
+[Implement fuzzy matching for the Finder
+simonpj@microsoft.com**20101222175400
+ Ignore-this: 4dfbbc07bcb59c5f4cee9a902c89d63e
+ 
+ ..so that you get a more helpful message when
+ you mis-spell a module name in an 'import'.
+ 
+ Validates, but not fully tested.
+ 
+ Based on Max's patch in Trac #2442, but heavily refactored.
+] 
+[Implement fuzzy matching for the renamer
+simonpj@microsoft.com**20101222175306
+ Ignore-this: 66478736249de793a61612f184d484b0
+ 
+ ...so that you get helpful suggestions when you mis-spell a name
+ Based on Max's patch in Trac #2442, but heavily refactored.
+] 
+[Add fuzzyLookup, a variant of fuzzyMatch
+simonpj@microsoft.com**20101222175124
+ Ignore-this: f0eafaf275b9edffee176f2fb4effe2f
+ 
+ Plus, I changed quite a bit of layout to make the lines shorter.
+] 
+[White space only
+simonpj@microsoft.com**20101222175001
+ Ignore-this: ddabada2042f4529e83d1c1ecb052306
+] 
+[Layout and white space only
+simonpj@microsoft.com**20101222174950
+ Ignore-this: bf4e4fd9d39714d0461ab799d6b8ed91
+] 
+[Tidy up rebindable syntax for MDo
+simonpj@microsoft.com**20101222132210
+ Ignore-this: b40ae8709e5a39d75f2b2813169af215
+ 
+ For a long time an 'mdo' expression has had a SyntaxTable
+ attached to it.  However, we're busy deprecating SyntaxTables
+ in favour of rebindable syntax attached to individual Stmts,
+ and MDoExpr was totally inconsistent with DoExpr in this
+ regard.
+ 
+ This patch tidies it all up.  Now there's no SyntaxTable on
+ MDoExpr, and 'modo' is generally handled much more like 'do'.
+ 
+ There is resulting small change in behaviour: now MonadFix is
+ required only if you actually *use* recursion in mdo. This
+ seems consistent with the implicit dependency analysis that
+ is done for mdo.
+ 
+ Still to do:
+   * Deal with #4148 (this patch is on the way)
+   * Get rid of the last remaining SyntaxTable on HsCmdTop
+] 
+[Make the occurrence analyser track preInlineUnconditionally
+simonpj@microsoft.com**20101222131156
+ Ignore-this: 82edb06bcca6106327c2cce9d78c4e61
+ 
+ This fixes a somewhat obscure situation in which an
+ over-optimistic use of "occurs once" led to an infinite
+ sequence of simplifier iterations.  Se Note [Cascading inlines]
+ for the details.
+ 
+ This showed up when compiling rather large DPH programs, which
+ run lots of iterations of the simplifier, which in turn made
+ compilation take much longer than necessary.
+] 
+[Make mkDFunUnfolding more robust
+simonpj@microsoft.com**20101222130854
+ Ignore-this: 10bb4168a7080c843f6613043354151b
+ 
+ It now uses tcSplitDFunTy, which is designed for the purpose and
+ allows arbitrary argument types to the dfun, rather than
+ tcSplitSigmaTy.  This generality is used in DPH, which has
+ internally-generated dfuns with impliciation-typed arguments.
+ 
+ To do this I had to make tcSplitDFunTy return the number of
+ arguments, so there are some minor knock-on effects in other
+ modules.
+] 
+[Count allocations more accurately
+Simon Marlow <marlowsd@gmail.com>**20101221152956
+ Ignore-this: 33a4ed3a77bf35f232aa5c9078e8e380
+ The allocation stats (+RTS -s etc.) used to count the slop at the end
+ of each nursery block (except the last) as allocated space, now we
+ count the allocated words accurately.  This should make allocation
+ figures more predictable, too.
+ 
+ This has the side effect of reducing the apparent allocations by a
+ small amount (~1%), so remember to take this into account when looking
+ at nofib results.
+] 
+[Add a simple arity analyser
+simonpj@microsoft.com**20101221165800
+ Ignore-this: d5f3a9f56404d61bb7f374c875b42c49
+ 
+ I've wanted to do this for ages, but never gotten around to
+ it.  The main notes are in Note [Arity analysis] in SimplUtils.
+ 
+ The motivating example for arity analysis is this:
+ 
+   f = \x. let g = f (x+1)
+           in \y. ...g...
+ 
+ What arity does f have?  Really it should have arity 2, but a naive
+ look at the RHS won't see that.  You need a fixpoint analysis which
+ says it has arity "infinity" the first time round.
+ 
+ This makes things more robust to the way in which you write code.  For
+ example, see Trac #4474 which is fixed by this change.
+ 
+ Not a huge difference, but worth while:
+ 
+         Program           Size    Allocs   Runtime   Elapsed
+ --------------------------------------------------------------------------------
+             Min          -0.4%     -2.2%    -10.0%    -10.0%
+             Max          +2.7%     +0.3%     +7.1%     +6.9%
+  Geometric Mean          -0.3%     -0.2%     -2.1%     -2.2%
+ 
+ I don't really believe the runtime numbers, because the machine was
+ busy, but the bottom line is that not much changes, and what does
+ change reliably (allocation and size) is in the right direction.
+] 
+[Miscellaneous tidying up and refactoring
+simonpj@microsoft.com**20101221161931
+ Ignore-this: 7706d3065e6fc1defafe1cb8975b9969
+] 
+[Comments only
+simonpj@microsoft.com**20101221161918
+ Ignore-this: 3e269a62da5cbec72d3e4b8328689628
+] 
+[Single-method classes are implemented with a newtype
+simonpj@microsoft.com**20101221161911
+ Ignore-this: 4ca00f0b367fbeb8146146bc53116eb7
+ 
+ This patch changes things so that such classes rely on the coercion
+ mechanism for inlining (since the constructor is really just a cast)
+ rather than on the dfun mechanism, therby removing some needless
+ runtime indirections.
+] 
+[For single-method classes use newtypes
+simonpj@microsoft.com**20101101080736
+ Ignore-this: d3851f92eb2385501411da57066b775e
+ 
+ This clears up an awkward hack for exprIsConApp_maybe, and
+ works better too.  See Note [Single-method classes] in
+ TcInstDcls.
+] 
+[boundTaskExiting: don't set task->stopped unless this is the last call (#4850)
+Simon Marlow <marlowsd@gmail.com>**20101221115807
+ Ignore-this: 7e1b990aa08b3ea9cdaa9385d8e41e48
+ The bug in this case was that we had a worker thread making a foreign
+ call which invoked a callback (in this case it was performGC, I
+ think).  When the callback ended, boundTaskExiting() was setting
+ task->stopped, but the Task is now per-OS-thread, so it is shared by
+ the worker that made the original foreign call.  When the foreign call
+ returned, because task->stopped was set, the worker was not placed on
+ the queue of spare workers.  Somehow the worker woke up again, and
+ found the spare_workers queue empty, which lead to a crash.
+ 
+ Two bugs here: task->stopped should not have been set by
+ boundTaskExiting (this broke when I split the Task and InCall structs,
+ in 6.12.2), and releaseCapabilityAndQueueWorker() should not be
+ testing task->stopped anyway, because it should only ever be called
+ when task->stopped is false (this is now an assertion).
+] 
+[releaseCapabilityAndQueueWorker: task->stopped should be false (#4850)
+Simon Marlow <marlowsd@gmail.com>**20101221114911
+ Ignore-this: b9c430a4bc9d2e0c7f4140d6d6971eae
+] 
+[Fix Windows build
+Simon Marlow <marlowsd@gmail.com>**20101221102101
+ Ignore-this: f4773e06d030a335c9ac721af193b8d2
+] 
+[raiseExceptionHelper: update tso->stackobj->sp before calling threadStackOverflow (#4845)
+Simon Marlow <marlowsd@gmail.com>**20101221101411
+ Ignore-this: 48495131fcc8c548882a470c2509f9f5
+] 
+[add 'make re2' for rebuilding stage2 (similarly re1 and re3)
+Simon Marlow <marlowsd@gmail.com>**20101221100254
+ Ignore-this: 5c0afe3810b66a5b6e53a3a0fe933945
+] 
+[fix warning
+Simon Marlow <marlowsd@gmail.com>**20101216160415
+ Ignore-this: 54a0eedfa5b7fc15c31dffffb1b10aad
+] 
+[Small improvement to CorePrep
+simonpj@microsoft.com**20101220123715
+ Ignore-this: d0490225ed1895a1a5b97d786ed44260
+ 
+ This change avoids unnecessary bindings. Example
+ 
+      foo (let fn = \x.blah in
+           in fn)
+ 
+ We were generating something stupid like
+ 
+     let fn = \x.blah in
+     let fn' = \eta. fn eta
+     in foo fn
+ 
+ Now we don't.  The change is quite small.
+ 
+ Thanks to Ben for showing me an example of this happening.
+] 
+[Fix warnings
+Ian Lynagh <igloo@earth.li>**20101219202711
+ Ignore-this: 898015b086f684de5371bf97a23b9e2e
+] 
+[Small refactoring
+Ian Lynagh <igloo@earth.li>**20101219194032] 
+[Drop GhcWithLlvmCodeGen configuration bits
+Matthias Kilian <kili@outback.escape.de>**20101219180239
+ Ignore-this: 815ed46be7650792f85807c232edfcc
+ The LLVM code generator is always built unconditionally, so both the
+ configuration variable in mk/config.mk.in as well as the string in
+ compilerInfo can be removed.
+] 
+[Pass --hoogle to haddock; fixes trac #4521
+Ian Lynagh <igloo@earth.li>**20101219125243] 
+[vectoriser: don't always pass superclass dictionaries to PA dfuns
+Roman Leshchinskiy <rl@cse.unsw.edu.au>**20101218234838
+ Ignore-this: 77c71976db8fc63aeb83f4abdba994d8
+ 
+ This is just a guess at how this should work.
+] 
+[vectoriser: delete dead code
+Roman Leshchinskiy <rl@cse.unsw.edu.au>**20101218125350
+ Ignore-this: 437eea71ad15ad5dc7902e596597c577
+] 
+[vectoriser: adapt to new superclass story part I (dictionary construction)
+Roman Leshchinskiy <rl@cse.unsw.edu.au>**20101218114953
+ Ignore-this: 29c9aa46a1622beaae1dcefc4c482a30
+] 
+[Replace uses of the old try function with the new one
+Ian Lynagh <igloo@earth.li>**20101218230827
+ Ignore-this: 5dd6c1a4142405aa1aab3fc4ec07eea6
+] 
+[Replace uses of the old catch function with the new one
+Ian Lynagh <igloo@earth.li>**20101218213350] 
+[Create ~/.ghc/ if it doesn't already exist; fixes trac #4522
+Ian Lynagh <igloo@earth.li>**20101218184925] 
+[Document GADTSyntax extension
+Ian Lynagh <igloo@earth.li>**20101218150121] 
+[Implement GADTSyntax extension
+Ian Lynagh <igloo@earth.li>**20101218144550] 
+[Whitespace-only in rts/Linker.c
+Ian Lynagh <igloo@earth.li>**20101217234124] 
+[Add some casts to fix warnings; patch from Greg Wright
+Ian Lynagh <igloo@earth.li>**20101217223811] 
+[Put an up-to-date Makefile in docs/Makefile
+Ian Lynagh <igloo@earth.li>**20101217223707
+ It doesn't do anything useful yet, but it works with the new build system
+] 
+[do not compile part of shared lib RTS with -fno-PIC on Solaris
+Karel Gardas <karel.gardas@centrum.cz>**20101217085133
+ Ignore-this: 8c8dbb45cac0578a58a3557f1e03c66
+] 
+[provide shared libraries support on i386-unknown-solaris2 platform
+Karel Gardas <karel.gardas@centrum.cz>**20101217084617
+ Ignore-this: b6079c6a39a71200a1ee863573e40828
+] 
+[fix CPP detection of Solaris in NCG
+Karel Gardas <karel.gardas@centrum.cz>**20101217084510
+ Ignore-this: 9d1ce59d469294eab1f0cbc697e48d69
+] 
+[Fix checkBinaries on OS X
+Ian Lynagh <igloo@earth.li>**20101216201121] 
+[Remove redundant HpcMap and HpcSet wrappers around Data.{Map,Set}
+Ian Lynagh <igloo@earth.li>**20101216190605] 
+[Use "-perm -u+x" rather than "-executable" to find executables
+Ian Lynagh <igloo@earth.li>**20101216145235
+ On Windows, -executable is matching the html docs.
+] 
+[Remove a debugging print
+Ian Lynagh <igloo@earth.li>**20101216011459] 
+[__GLASGOW_HASKELL__ >= 604 is now always true
+Ian Lynagh <igloo@earth.li>**20101215214656] 
+[Remove more dead code now we require GHC >= 6.12
+Ian Lynagh <igloo@earth.li>**20101215213715] 
+[refactor and tidy up the section on RTS options
+Simon Marlow <marlowsd@gmail.com>**20101216123151
+ Ignore-this: 9cdafd687351d8a3ff879b64347f85d3
+] 
+[Related to #4826: Some minor tweaks to the wording of the User Guide, section 4.16
+Orphi <MathematicalOrchid@hotmail.com>**20101209170440
+ Ignore-this: c3d942d58594be7d4c2eb4dc3a22f19
+] 
+[FIX #4826 partial: Add -rtsopts and -with-rtsopts to User Guide section 4.11.6
+Orphi <MathematicalOrchid@hotmail.com>**20101209165152
+ Ignore-this: 2fc1c0abbb783695773ab0f9c013bbaa
+] 
+[FIX #4826 partially: Change -f to -? in User Guide section F4.16
+Orphi <MathematicalOrchid@hotmail.com>**20101209144148
+ Ignore-this: 73410b350e80c8943ae722dec8dea44b
+] 
+[fix #3910
+Simon Marlow <marlowsd@gmail.com>**20101216114452
+ Ignore-this: 410e95e188344a523520e192a3fb58ea
+] 
+[remove an optimisation that wasn't
+Simon Marlow <marlowsd@gmail.com>**20101215152656
+ Ignore-this: e8413f58e8292c6e7463087d885b3a7d
+] 
+[fix a warning
+Simon Marlow <marlowsd@gmail.com>**20101216105723
+ Ignore-this: ed6024378021a698ce638267ed3e21ab
+] 
+[use EXTERN_INLINE instead of STATIC_INLINE to avoid some gcc warnings
+Simon Marlow <marlowsd@gmail.com>**20101216105709
+ Ignore-this: d4e1586cf318883a8e611b55df7fbf10
+] 
+[remove dead code
+Simon Marlow <marlowsd@gmail.com>**20101216104944
+ Ignore-this: 97a04a3e37c1b28abc222a28bab3d17d
+] 
+[fix retainer profiling: add missing case for TSO
+Simon Marlow <marlowsd@gmail.com>**20101216103900
+ Ignore-this: 11bda81ac159f638d719c1f6177702fb
+] 
+[add a missing STACK case
+Simon Marlow <marlowsd@gmail.com>**20101216102100
+ Ignore-this: ac1c036b5cbf4209b1d10b6ab1c83f27
+] 
+[Remove code that is dead now that we need >= 6.12 to build
+Ian Lynagh <igloo@earth.li>**20101215201006] 
+[fix for large stack allocations
+Simon Marlow <marlowsd@gmail.com>**20101215152419
+ Ignore-this: d9aca17d68bd99214c126989a2318e79
+] 
+[Implement stack chunks and separate TSO/STACK objects
+Simon Marlow <marlowsd@gmail.com>**20101215120843
+ Ignore-this: 73fa9460314d4a4e54456af12bef7960
+ 
+ This patch makes two changes to the way stacks are managed:
+ 
+ 1. The stack is now stored in a separate object from the TSO.
+ 
+ This means that it is easier to replace the stack object for a thread
+ when the stack overflows or underflows; we don't have to leave behind
+ the old TSO as an indirection any more.  Consequently, we can remove
+ ThreadRelocated and deRefTSO(), which were a pain.
+ 
+ This is obviously the right thing, but the last time I tried to do it
+ it made performance worse.  This time I seem to have cracked it.
+ 
+ 2. Stacks are now represented as a chain of chunks, rather than
+    a single monolithic object.
+ 
+ The big advantage here is that individual chunks are marked clean or
+ dirty according to whether they contain pointers to the young
+ generation, and the GC can avoid traversing clean stack chunks during
+ a young-generation collection.  This means that programs with deep
+ stacks will see a big saving in GC overhead when using the default GC
+ settings.
+ 
+ A secondary advantage is that there is much less copying involved as
+ the stack grows.  Programs that quickly grow a deep stack will see big
+ improvements.
+ 
+ In some ways the implementation is simpler, as nothing special needs
+ to be done to reclaim stack as the stack shrinks (the GC just recovers
+ the dead stack chunks).  On the other hand, we have to manage stack
+ underflow between chunks, so there's a new stack frame
+ (UNDERFLOW_FRAME), and we now have separate TSO and STACK objects.
+ The total amount of code is probably about the same as before.
+ 
+ There are new RTS flags:
+ 
+    -ki<size> Sets the initial thread stack size (default 1k)  Egs: -ki4k -ki2m
+    -kc<size> Sets the stack chunk size (default 32k)
+    -kb<size> Sets the stack chunk buffer size (default 1k)
+ 
+ -ki was previously called just -k, and the old name is still accepted
+ for backwards compatibility.  These new options are documented.
+] 
+[comments on SRC_HC_OPTS (#4829)
+Simon Marlow <marlowsd@gmail.com>**20101214101340
+ Ignore-this: e2bdec00f07b68e82837e77a4faf6514
+] 
+[fix another sanity error, and refactor/tidy up
+Simon Marlow <marlowsd@gmail.com>**20101209163919
+ Ignore-this: d5ce953ac78e90fc0e22cd9848d26e2e
+] 
+[Fix a bug in functorLikeTraverse, which was giving wrong answer for tuples
+simonpj@microsoft.com**20101215123725
+ Ignore-this: 560220e92429b5b1a6197a62f94a4ff2
+ 
+ This bug led to Trac #4816, which is hereby fixed
+] 
+[Improve printing for -ddump-deriv
+simonpj@microsoft.com**20101215121955
+ Ignore-this: 3181c948c4c2471bd99b32c5ee487a1e
+] 
+[Tighten up what it means to be an "enumeration data constructor"
+simonpj@microsoft.com**20101215121927
+ Ignore-this: 459b3f9f7994a13094ed87b0768b33a8
+ 
+ See Note [Enumeration types] in TyCon, and comments in Trac #4528
+] 
+[Allow enumerations to have phantom arguments.
+simonpj@microsoft.com**20101215121817
+ Ignore-this: 32ef8cb869e6e38c2e43b3ae87b1b9a8
+ 
+ The bytecode generator was being too eager.
+ Fixes Trac #4528, or rather, a near variant.
+] 
+[Instance declaration overlap allowed if *either* has -XOverlappingInstances
+simonpj@microsoft.com**20101214180500
+ Ignore-this: f1b1492541a7e0464ebc6adb45510a2e
+ 
+ This satisfies Trac #3877.  Documentation is changed too.
+ I'm not sure if this should go in 7.0.2.
+] 
+[Fix Trac #4841: behave right with TypeSynonymInstances and NoFlexibleInstances
+simonpj@microsoft.com**20101214174755
+ Ignore-this: dccd707fdca84904b7885170a296ecb6
+ 
+ When we have TypeSynonymInstances without FlexibleInstances we should still
+ insist on a H98-style instance head, after looking through the synonym.
+ 
+ This patch also make FlexibleInstances imply TypeSynonymInstances.  Anything
+ else is a bit awkward, and not very useful.
+ 
+] 
+[Fix Trac #3731: more superclass subtlety (sigh)
+simonpj@microsoft.com**20101214180344
+ Ignore-this: f4168e59f3164303ba7be022ba19c37b
+ 
+ I will add more comments, but I want to commit this tonight,
+ so the overnight builds get it.
+] 
+[Less verbose debug print
+simonpj@microsoft.com**20101214180248
+ Ignore-this: e405e8545763e913155abe43daf7e36c
+] 
+[Wibble to InstEnv.instanceHead
+simonpj@microsoft.com**20101214082939
+ Ignore-this: 851db517f8638a0aeb7ad461298f7e9f
+ 
+ Fixes an accidental glitch in T1835
+] 
+[Remove dead code now that we require the bootstrapping compiler be >= 6.12
+Ian Lynagh <igloo@earth.li>**20101214011011] 
+[GHC 6.12 is now needed to build the HEAD
+Ian Lynagh <igloo@earth.li>**20101214010923] 
+[Add libstdc++-4.5.0-1-mingw32-dll-6.tar.lzma to mingw tarballs
+Ian Lynagh <igloo@earth.li>**20101213223153] 
+[Fix recursive superclasses (again).  Fixes Trac #4809.
+simonpj@microsoft.com**20101213171511
+ Ignore-this: b91651397918fd8f0183812f9a070073
+ 
+ This patch finally deals with the super-delicate question of
+ superclases in possibly-recursive dictionaries.  The key idea
+ is the DFun Superclass Invariant (see TcInstDcls):
+ 
+      In the body of a DFun, every superclass argument to the
+      returned dictionary is
+        either   * one of the arguments of the DFun,
+        or       * constant, bound at top level
+ 
+ To establish the invariant, we add new "silent" superclass
+ argument(s) to each dfun, so that the dfun does not do superclass
+ selection internally.  There's a bit of hoo-ha to make sure that
+ we don't print those silent arguments in error messages; a knock
+ on effect was a change in interface-file format.
+ 
+ A second change is that instead of the complex and fragile
+ "self dictionary binding" in TcInstDcls and TcClassDcl,
+ using the same mechanism for existential pattern bindings.
+ See Note [Subtle interaction of recursion and overlap] in TcInstDcls
+ and Note [Binding when looking up instances] in InstEnv.
+ 
+ Main notes are here:
+ 
+   * Note [Silent Superclass Arguments] in TcInstDcls,
+     including the DFun Superclass Invariant
+ 
+ Main code changes are:
+ 
+   * The code for MkId.mkDictFunId and mkDictFunTy
+ 
+   * DFunUnfoldings get a little more complicated;
+     their arguments are a new type DFunArg (in CoreSyn)
+ 
+   * No "self" argument in tcInstanceMethod
+   * No special tcSimplifySuperClasss
+   * No "dependents" argument to EvDFunApp
+ 
+ IMPORTANT
+    It turns out that it's quite tricky to generate the right
+    DFunUnfolding for a specialised dfun, when you use SPECIALISE
+    INSTANCE.  For now I've just commented it out (in DsBinds) but
+    that'll lose some optimisation, and I need to get back to
+    this.
+] 
+[Doing the smart canonicalization only if we are not simplifying a Rule LHS.
+dimitris@microsoft.com**20101210132221
+ Also, same thing now applies for adding superclasses.
+ 
+] 
+[Moved canonicalisation inside solveInteract
+dimitris@microsoft.com**20101209141215
+ 
+ Moreover canonicalisation now is "clever", i.e. it never canonicalizes a class 
+ constraint if it can already discharge it from some other inert or previously
+ encountered constraints. See Note [Avoiding the superclass explosion]
+ 
+] 
+[GHCi linker: Assume non-Haskell libraries are dynamic libs
+Ian Lynagh <igloo@earth.li>**20101213124930
+ Ignore-this: aa153a8f6e309c7b3dae7e46bb7a9583
+ This works around a segfault we get when trying to load libiconv.a on
+ some platforms.
+] 
+[Add --version support to ghc-cabal
+Ian Lynagh <igloo@earth.li>**20101212213600
+ Ignore-this: ef696dcb1b96a23765f9f18e75a56f5
+] 
+[Don't link the GHC RTS into our C-only programs
+Ian Lynagh <igloo@earth.li>**20101210185402
+ Ignore-this: 56f620f7eb16a03e7497a161bc48458e
+] 
+[Build a copy of ghc-cabal with the in-tree compiler, for the bindist
+Ian Lynagh <igloo@earth.li>**20101210181123] 
+[Add a test that all programs in the bindist were built with the right GHC
+Ian Lynagh <igloo@earth.li>**20101210161218
+ They should use the GHC from the build tree, not the bootstrapping compiler.
+] 
+[Fix Trac #4534: renamer bug
+simonpj@microsoft.com**20101210084530
+ Ignore-this: 8163bfa3a56344cfe89ad17c62e9655d
+   
+ The renamer wasn't attaching the right used-variables to a
+ TransformStmt constructor.
+ 
+ The real modification is in RnExpr; the rest is just
+ pretty-printing and white space.
+] 
+[White space only
+simonpj@microsoft.com**20101210084255
+ Ignore-this: 3fcf8a4fc8c15052c379a135951d53ea
+] 
+[Comments only
+simonpj@microsoft.com**20101210084116
+ Ignore-this: 55bb1de129b1c9513751885eaa84b884
+] 
+[Make the case-to-let transformation a little less eager
+simonpj@microsoft.com**20101208172251
+ Ignore-this: 55eaa1b5753af31aeb32ec792cb6b662
+ 
+ See Note [Case elimination: lifted case].
+ Thanks to Roman for identifying this case.
+] 
+[warning fix: don't redefine BLOCKS_PER_MBLOCK
+Simon Marlow <marlowsd@gmail.com>**20101210094002
+ Ignore-this: cadba57f1c38f5e2af1de37d0a79c7ee
+] 
+[Only reset the event log if logging is turned on (addendum to #4512)
+Simon Marlow <marlowsd@gmail.com>**20101210093951
+ Ignore-this: c9f85f0de2b11a37337672fba59aecc6
+] 
+[allocate enough room for the longer filename (addendum to #4512)
+Simon Marlow <marlowsd@gmail.com>**20101210093906
+ Ignore-this: 270dc0219d98f1e0f9e006102ade7087
+] 
+[Fix Windows build: move rtsTimerSignal to the POSIX-only section
+Simon Marlow <marlowsd@gmail.com>**20101210090045
+ Ignore-this: aa1844b70b9f1a44447787c4bbe10d44
+] 
+[Default the value of -dppr-cols when the static flags aren't initialised yet
+Ben Lippmeier <benl@ouroborus.net>**20101210060154
+ Ignore-this: 4cea29085ef904f379a8829714c9e180
+ If GHC's command line options are bad then the options parser uses the
+ pretty printer before the -dppr-cols flag has been read.
+] 
+[Defensify naked read in LLVM mangler
+Ben Lippmeier <benl@ouroborus.net>**20101210045922
+ Ignore-this: 1373f597863851bd03e7a7254558ed04
+] 
+[Formatting only
+Ben Lippmeier <benl@ouroborus.net>**20101210042600
+ Ignore-this: 20bbcd95c70b59094d0bb8a63e459103
+] 
+[Always ppr case alts on separate lines
+Ben Lippmeier <benl@ouroborus.net>**20101208070508
+ Ignore-this: 7e2edd57a61427621aeb254aef84f0f7
+] 
+[Add -dppr-colsN to set width of dumps
+Ben Lippmeier <benl@ouroborus.net>**20101208070245
+ Ignore-this: edc64fee6c373b895bb80b83b549ce1a
+] 
+[Add -dppr-case-as-let to print "strict lets" as actual lets
+Ben Lippmeier <benl@ouroborus.net>**20101208065548
+ Ignore-this: eb1d122dbd73b5263cae3a9f8259a838
+] 
+[Suppress more info with -dsuppress-idinfo
+Ben Lippmeier <benl@ouroborus.net>**20101208063037
+ Ignore-this: 5e8213d7b8d2905e245917aa3e83efc5
+] 
+[Implement -dsuppress-type-signatures
+Ben Lippmeier <benl@ouroborus.net>**20101208062814
+ Ignore-this: 34dbefe5f8d7fe58ecb26d6a748d1c71
+] 
+[Add more suppression flags
+Ben Lippmeier <benl@ouroborus.net>**20101208020723
+ Ignore-this: b010ba9789a2fde6b815f33494fcc23c
+  -dsuppress-all
+  -dsuppress-type-applications
+  -dsuppress-idinfo
+] 
+[fix ticket number (#4505)
+Simon Marlow <marlowsd@gmail.com>**20101209120404
+ Ignore-this: 5769c5ce2a8d69d62d977a9ae138ec23
+] 
+[fix warnings
+Simon Marlow <marlowsd@gmail.com>**20101209115844
+ Ignore-this: ffff37feb2abbfc5bd12940c7007c208
+] 
+[Catch too-large allocations and emit an error message (#4505)
+Simon Marlow <marlowsd@gmail.com>**20101209114005
+ Ignore-this: c9013ab63dd0bd62ea045060528550c6
+ 
+ This is a temporary measure until we fix the bug properly (which is
+ somewhat tricky, and we think might be easier in the new code
+ generator).
+ 
+ For now we get:
+ 
+ ghc-stage2: sorry! (unimplemented feature or known bug)
+   (GHC version 7.1 for i386-unknown-linux):
+         Trying to allocate more than 1040384 bytes.
+ 
+ See: http://hackage.haskell.org/trac/ghc/ticket/4550
+ Suggestion: read data from a file instead of having large static data
+ structures in the code.
+] 
+[Export the value of the signal used by scheduler (#4504)
+Dmitry Astapov <dastapov@gmail.com>**20101208183755
+ Ignore-this: 427bf8c2469283fc7a6f759440d07d87
+] 
+[Tweak the "sorry" message a bit
+Simon Marlow <marlowsd@gmail.com>**20101208163212
+ Ignore-this: aa1ce5bc3c27111548204b740572efbe
+ 
+ -		"sorry! (this is work in progress)\n"
+ +		"sorry! (unimplemented feature or known bug)\n"
+] 
+[:unset settings support
+Boris Lykah <lykahb@gmail.com>**20101123190132
+ Ignore-this: 5e97c99238f5d2394592858c34c004d
+ Added support for settings [args, prog, prompt, editor and stop].
+ Now :unset supports the same set of options as :set.
+] 
+[Fix Windows memory freeing: add a check for fb == NULL; fixes trac #4506
+Ian Lynagh <igloo@earth.li>**20101208152349
+ Also added a few comments, and a load of code got indented 1 level deeper.
+] 
+[Fixes for #4512: EventLog.c - provides ability to terminate event logging, Schedule.c - uses them in forkProcess.
+Dmitry Astapov <dastapov@gmail.com>**20101203133950
+ Ignore-this: 2da7f215d6c22708a18291a416ba8881
+] 
+[Make CPPFLAGS variables, as well as CFLAGS and LDFLAGS
+Ian Lynagh <igloo@earth.li>**20101207010033
+ Ignore-this: 2fc1ca1422aae1988d0fe1d29a8485d9
+ This fixes the "does unsetenv return void" test in the unix package on
+ OS X, if I tell it to make 10.4-compatible binaries. The test uses
+ CPPFLAGS but not CFLAGS, so it thought it returned int (as it was
+ in 10.5-mode), but the C compiler (using CFLAGS, so in 10.4 mode)
+ thought it returned void.
+ 
+ I also added CONF_LD_OPTS_STAGE$3 to the list of things in LDFLAGS,
+ which looks like an accidental ommission.
+] 
+[Add a configure message
+Ian Lynagh <igloo@earth.li>**20101206215201] 
+[Link even programs containing no Haskell modules with GHC
+Ian Lynagh <igloo@earth.li>**20101206203329
+ I don't remember why we made it use gcc instead, but going back to
+ using ghc doesn't seem to break anything, and should fix the build
+ on OS X 10.6.
+] 
+[Correct the stage that the includes/ tools are built in
+Ian Lynagh <igloo@earth.li>**20101206203125] 
+[Tweak the cleaning of inplace/; fixes trac #4320
+Ian Lynagh <igloo@earth.li>**20101205212048] 
+[Close .ghci files after reading them; fixes trac #4487
+Ian Lynagh <igloo@earth.li>**20101205205301] 
+[Fix the behaviour of :history for ticks surrounding top level functions
+pepeiborra@gmail.com**20101203202346
+ Ignore-this: 8059d4859c52c0c9a235b937cb8cde1d
+] 
+[Don't warn of duplicate exports in case of module exports.
+Michal Terepeta <michal.terepeta@gmail.com>**20101127212116
+ Ignore-this: ea225d517826f971c400bbb68d1405b8
+ 
+ But only when the module exports refer to different modules.
+ See ticket #4478.
+] 
+[Fix whitespace/layout in RnNames.
+Michal Terepeta <michal.terepeta@gmail.com>**20101030171303
+ Ignore-this: 707a7955fc4fc51683cc5a1dfe57f93
+] 
+[Tell gcc to support back to OS X 10.5
+Ian Lynagh <igloo@earth.li>**20101203201558
+ Ignore-this: f02d70e5b9cce50137981c6cb2b62a18
+] 
+[Make RelaxedLayout off by default
+Ian Lynagh <igloo@earth.li>**20101202140808
+ I suspect this is a vary rarely used extension to the official layout
+ rule.
+] 
+[Fix up TcInstDcls
+simonpj@microsoft.com**20101203180758
+ Ignore-this: 9311aeb4ee67c799704afec90b5982d0
+ 
+ I really don't know how this module got left out of my last
+ patch, namely
+   Thu Dec  2 12:35:47 GMT 2010  simonpj@microsoft.com
+   * Re-jig simplifySuperClass (again)
+ 
+ I suggest you don't pull either the patch above, or this
+ one, unless you really have to.  I'm not fully confident
+ that it works properly yet.  Ran out of time. Sigh.
+] 
+[throwTo: report the why_blocked value in the barf()
+Simon Marlow <marlowsd@gmail.com>**20101203094840
+ Ignore-this: 3b167c581be1c51dfe3586cc6359e1d0
+] 
+[handle ThreadMigrating in throwTo() (#4811)
+Simon Marlow <marlowsd@gmail.com>**20101203094818
+ Ignore-this: 8ef8cb7fd3b50a27f83c29968131d461
+ If a throwTo targets a thread that has just been created with
+ forkOnIO, then it is possible the exception strikes while the thread
+ is still in the process of migrating.  throwTo() didn't handle this
+ case, but it's fairly straightforward.
+] 
+[removeThreadFromQueue: stub out the link field before returning (#4813)
+Simon Marlow <marlowsd@gmail.com>**20101202160838
+ Ignore-this: 653ae17bc1120d7f4130da94665002a1
+] 
+[small tidyup
+Simon Marlow <marlowsd@gmail.com>**20101126140620
+ Ignore-this: 70b1d5ed4c81a7b29dd5980a2d84aae1
+] 
+[Fix a recomp bug: make classes/datatypes depend directly on DFuns (#4469)
+Simon Marlow <marlowsd@gmail.com>**20101202122349
+ Ignore-this: 61c765583bb1d97caa88cf9b4f45b87c
+ And remove the old mechanism of recording dfun uses separately,
+ because it didn't work.
+ 
+ This wiki page describes recompilation avoidance and fingerprinting.
+ I'll update it to describe the new method and what went wrong with the
+ old method:
+ 
+ http://hackage.haskell.org/trac/ghc/wiki/Commentary/Compiler/RecompilationAvoidance
+] 
+[make a panic message more informative and suggest -dcore-lint (see #4534)
+Simon Marlow <marlowsd@gmail.com>**20101201151706
+ Ignore-this: 2a10761925d6f9f52675948baa30f7a
+] 
+[Re-jig simplifySuperClass (again)
+simonpj@microsoft.com**20101202123547
+ Ignore-this: fe4062b8988258f6748ebd8fbd6515b5
+ 
+ This fixes the current loop in T3731, and will fix other
+ reported loops.  The loops show up when we are generating
+ evidence for superclasses in an instance declaration.
+ 
+ The trick is to make the "self" dictionary simplifySuperClass
+ depend *explicitly* on the superclass we are currently trying
+ to build.  See Note [Dependencies in self dictionaries] in TcSimplify.
+ 
+ That in turn means that EvDFunApp needs a dependency-list, used
+ when chasing dependencies in isGoodRecEv.
+] 
+[A little refactoring (remove redundant argument passed to isGoodRecEv)
+simonpj@microsoft.com**20101202123110
+ Ignore-this: e517c5c12109a230f08dafb4d1e386df
+] 
+[Make rebindable if-then-else a little more permissive
+simonpj@microsoft.com**20101202122540
+ Ignore-this: ddb552cfe307607b42d1e4baf4e3bf21
+ 
+ See Note [Rebindable syntax for if].  Fixes Trac #4798.
+ Thanks to Nils Schweinsberg <mail@n-sch.de>
+] 
+[Improve error message (Trac #4799)
+simonpj@microsoft.com**20101202102706
+ Ignore-this: d9896e4d182936de1f256c820b96a8cf
+] 
+[Fix a nasty bug in RULE matching: Trac #4814
+simonpj@microsoft.com**20101202102618
+ Ignore-this: ba058ad46a02bd2faf3a14de93fd19c6
+ 
+ See Note [Matching lets], which explains it all in detail.
+ It took me a day to think of a nice way to fix the bug,
+ but I think the result is quite respectable. Subtle, though.
+] 
+[Rename -XPArr to -XParallelArrays
+Ben Lippmeier <benl@ouroborus.net>**20101130075415
+ Ignore-this: 21b37680a7f25800d1200b59ad0b6b39
+] 
+[FIX #1845 (unconditional relative branch out of range)
+pho@cielonegro.org**20101130143014
+ Ignore-this: df234bd8ad937104c455656fe3c33732
+ 
+ Don't use mmap on powerpc-apple-darwin as mmap doesn't support
+ reallocating but we need to allocate jump islands just after each
+ object images. Otherwise relative branches to jump islands can fail
+ due to 24-bits displacement overflow.
+] 
+[rts/Linker.c (loadArchive):
+pho@cielonegro.org**20101130142700
+ Ignore-this: bc84f9369ce5c2d289440701b7a3a2ab
+ 
+ This routine should be aware of Mach-O misalignment of malloc'ed memory regions.
+] 
+[rts/Linker.c (machoGetMisalignment):
+pho@cielonegro.org**20101130123355
+ Ignore-this: 75425600049efd587e9873578e26392f
+ 
+ Use fseek(3) instead of rewind(3) to move the file position indicator back to the initial position. Otherwise we can't use this function in loadArchive().
+] 
+[rts/Linker.c (ocFlushInstructionCache):
+pho@cielonegro.org**20101130121425
+ Ignore-this: 1e2c207e4b1d17387617ec5d645204b7
+ 
+ I found this function causes a segfault when ocAllocateSymbolExtras() has allocated a separate memory region for jump islands.
+] 
+[Remove NewQualifiedOperators
+Ian Lynagh <igloo@earth.li>**20101201181117
+ The extension was rejected by Haskell', and deprecated in 7.0.
+] 
+[fix ref to utils/ext-core, which moved to Hackage (extcore package)
+Simon Marlow <marlowsd@gmail.com>**20101201092147
+ Ignore-this: 272a7daaa335ef60bcc645db70b4d68b
+] 
+[fix floating-point/FFI section: fenv is C99, not POSIX
+Simon Marlow <marlowsd@gmail.com>**20101201092119
+ Ignore-this: ce8b3edd428e4f77691dd739b5b4ae73
+] 
+[Fixed some 'unused vars' warnings
+keller@cse.unsw.edu.au**20101130013425
+ Ignore-this: 35790d443faa23b87e4ba442e62376a3
+] 
+[vectScalarLam handles int, float, and double now
+keller@cse.unsw.edu.au**20101129231043
+ Ignore-this: 6d67bdc8dd8577184040e791e6f3d0
+] 
+[Handling of lets, letrec and case when checking if a lambda expr needs to be vectorised
+keller@cse.unsw.edu.au**20101115051225
+ Ignore-this: 1db6ed63d7b3f6d093e019322b407ff7
+] 
+[Document the behaviour of fenv.h functions with GHC (#4391)
+Simon Marlow <marlowsd@gmail.com>**20101126125336
+ Ignore-this: bc4eab49428d567505a28add6fed90f1
+] 
+[Remove the no-ghci-lib warning in ghc-pkg
+Ian Lynagh <igloo@earth.li>**20101127235805
+ GHCi libs are no longer necessary, as we can use the .a or .so versions
+ instead.
+] 
+[Add GNU-variant support to the .a parser, and other improvements/tidyups
+Ian Lynagh <igloo@earth.li>**20101127223945] 
+[Re-indent only
+Ian Lynagh <igloo@earth.li>**20101127191646] 
+[Improve linker debugging for archive files
+Ian Lynagh <igloo@earth.li>**20101127190907] 
+[Always enable the archive-loading code
+Ian Lynagh <igloo@earth.li>**20101127173000
+ If the GHCi .o lib doesn't exist, load the .a instead
+] 
+[Inherit the ForceSpecConstr flag in non-recursive nested bindings
+Roman Leshchinskiy <rl@cse.unsw.edu.au>**20101127125025
+ Ignore-this: 401391eae25cefcb4afaba2e357decc1
+ 
+ This makes sure that join points are fully specialised in loops which are
+ marked as ForceSpecConstr.
+] 
+[Document -ddump-rule-firings and -ddump-rule-rewrites
+Roman Leshchinskiy <rl@cse.unsw.edu.au>**20101127123528
+ Ignore-this: beade2efe0cd767c0ce9d4f45a3380ba
+] 
+[New flag -dddump-rule-rewrites
+Roman Leshchinskiy <rl@cse.unsw.edu.au>**20101127122022
+ Ignore-this: c0ef5b8a199fbd1ef020258d2cde85a3
+ 
+ Now, -ddump-rule-firings only shows the names of the rules that fired (it would
+ show "before" and "after" with -dverbose-core2core previously) and
+ -ddump-rule-rewrites always shows the "before" and "after" bits, even without
+ -dverbose-core2core.
+] 
+[Acutally, wild-card variables *can* have occurrences
+simonpj@microsoft.com**20101126162409
+ Ignore-this: 544bffed75eeccef03a1097f98524eea
+ 
+ This patch removes the Lint test, and comments why
+] 
+[Tidy up the handling of wild-card binders, and make Lint check it
+simonpj@microsoft.com**20101126133210
+ Ignore-this: 9e0be9f7867d53046ee5b0e478a0f433
+ 
+ See Note [WildCard binders] in SimplEnv.  Spotted by Roman.
+] 
+[Substitution should just substitute, not optimise
+simonpj@microsoft.com**20101125172356
+ Ignore-this: 657628d9b6796ceb5f915c43d56e4a06
+ 
+ This was causing Trac #4524, by optimising
+      (e |> co)  to   e
+ on the LHS of a rule.  Result, the template variable
+ 'co' wasn't bound any more.
+ 
+ Now that substition doesn't optimise, it seems sensible to call
+ simpleOptExpr rather than substExpr when substituting in the
+ RHS of rules.  Not a big deal either way.
+] 
+[Make SpecConstr "look through" identity coercions
+simonpj@microsoft.com**20101125172138
+ Ignore-this: c1cc585ed890a7702c33987e971e0af6
+] 
+[Comment only
+simonpj@microsoft.com**20101125172011
+ Ignore-this: 3c7be8791badd00dcca9610ebb8981d1
+] 
+[White space only
+simonpj@microsoft.com**20101101080748
+ Ignore-this: f7133fc6b22ae263c6672543a8534a6f
+] 
+[Keep a maximum of 6 spare worker threads per Capability (#4262)
+Simon Marlow <marlowsd@gmail.com>**20101125135729
+ Ignore-this: a020786569656bf2f3a1717b65d463bd
+] 
+[Unicide OtherNumber category should be allowed in identifiers (#4373)
+Simon Marlow <marlowsd@gmail.com>**20101115095444
+ Ignore-this: e331b6ddb17550163ee91bd283348800
+] 
+[vectoriser: fix warning
+Ben Lippmeier <benl@ouroborus.net>**20101126044036
+ Ignore-this: e1a66bb405bf2f3f56b42c3b13fd4bf3
+] 
+[vectoriser: fix warning
+Ben Lippmeier <benl@ouroborus.net>**20101126042950
+ Ignore-this: df8dd25bcfb3946c2974b13953a2f2c7
+] 
+[vectoriser: take class directly from the instance tycon
+Ben Lippmeier <benl@ouroborus.net>**20101126042900
+ Ignore-this: 626a416717a5a059f39e53f4ec95fc66
+] 
+[vectoriser: comments only
+Ben Lippmeier <benl@ouroborus.net>**20101125073201
+ Ignore-this: 8846ea8895307083bd1ebbc5d7fb1c5
+] 
+[vectoriser: follow changes in mkClass
+Ben Lippmeier <benl@ouroborus.net>**20101125062349
+ Ignore-this: d5018cc022686d4272e126ca9a12283a
+] 
+[vectoriser: tracing wibbles
+Ben Lippmeier <benl@ouroborus.net>**20101125062332
+ Ignore-this: c2024d8f03bc03bee2851f4f1c139fd5
+] 
+[mkDFunUnfolding wants the type of the dfun to be a PredTy
+benl@ouroborus.net**20100914062939
+ Ignore-this: 7aa6e6b140746184cf00355b50c83b66
+] 
+[vectoriser: fix conflicts
+Ben Lippmeier <benl@ouroborus.net>**20101125060904
+ Ignore-this: cc3decab1affada8629ca3818b76b3bf
+] 
+[Comments and formatting only
+benl@ouroborus.net**20100914062903
+ Ignore-this: b0fc25f0952cafd56cc25353936327d4
+] 
+[Comments and formatting to type environment vectoriser
+benl@ouroborus.net**20100909080405
+ Ignore-this: ab8549d53f845c9d82ed9a525fda3906
+] 
+[Don't mix implicit and explicit layout
+Ian Lynagh <igloo@earth.li>**20101124231514] 
+[Whitespace only
+Ian Lynagh <igloo@earth.li>**20101124230655] 
+[Separate NondecreasingIndentation out into its own extension
+Ian Lynagh <igloo@earth.li>**20101124220507] 
+[Add another GHC layout rule relaxation to RelaxedLayout
+Ian Lynagh <igloo@earth.li>**20101124205957] 
+[Remove an unused build system variable: GhcDir
+Ian Lynagh <igloo@earth.li>**20101124140455] 
+[Remove unused build system variable: GhcHasEditline
+Ian Lynagh <igloo@earth.li>**20101124140415] 
+[Remove unused variables from the build system: HBC, NHC, MKDEPENDHS
+Ian Lynagh <igloo@earth.li>**20101124140052] 
+[Remove references to Haskell 98
+Ian Lynagh <igloo@earth.li>**20101123233536
+ They are no longer right, as we have Haskell' generating new Haskell
+ standards.
+] 
+[Tweak a configure test
+Ian Lynagh <igloo@earth.li>**20101123170621] 
+[Add a configure test for the visibility hidden attribute
+Ian Lynagh <igloo@earth.li>**20101123170541] 
+[sanity: fix places where we weren't filling fresh memory with 0xaa
+Simon Marlow <marlowsd@gmail.com>**20101029092843
+ Ignore-this: 2cb18f7f5afcaf33371aeffce67e218f
+] 
+[Just some alpha renaming
+Ian Lynagh <igloo@earth.li>**20101121144455
+ Ignore-this: d5e807c5470840efc199e29f7d50804c
+] 
+[Fix bug #3165 (:history throws irrefutable pattern failed)
+pepeiborra@gmail.com**20101115223623
+ Ignore-this: 73edf56e502b4d0385bc044133b27946
+ 
+ I ran across this bug and took the time to fix it, closing
+ a long time due TODO in InteractiveEval.hs
+ 
+ Instead of looking around to find the enclosing declaration
+ of a tick, this patch makes use of the information already collected during the
+ coverage desugaring phase
+] 
+[For bindists, build ghc-pwd with stage 1
+Ian Lynagh <igloo@earth.li>**20101121183520
+ Ignore-this: a3b5c8b78c81ec1b6d5fbf23da346ff5
+ rather then the bootstrapping compiler. This fixes problems where the
+ bootstrapping compiler dynamically links against libraries not on the
+ target machine.
+] 
+[Makefile tweak
+Ian Lynagh <igloo@earth.li>**20101121183342
+ Ignore-this: cd55a2819c1a5fd36da1bc7a75d2ded1
+] 
+[Fix a makefile include ordering sanity check
+Ian Lynagh <igloo@earth.li>**20101121174916
+ Ignore-this: d0bdd41c4b618944d04ecb4f54fdd0f1
+] 
+[Add an extension for GHC's layout-rule relaxations
+Ian Lynagh <igloo@earth.li>**20101120215340
+ Still TODO: Add the other relaxation (#1060) and update the alternative
+ layout rule to use the extension.
+] 
+[Tweak the bindist configure.ac.in
+Ian Lynagh <igloo@earth.li>**20101120173735] 
+[configure.ac tweaks
+Ian Lynagh <igloo@earth.li>**20101120170245] 
+[When testing the bindist, tell it where gcc is
+Ian Lynagh <igloo@earth.li>**20101120155920
+ The location isn't baked into the bindist, as it may differ from
+ machine to machine.
+] 
+[Comments only
+simonpj@microsoft.com**20101119100153
+ Ignore-this: 7abd5d965ea805770449d6f8dadbb921
+] 
+[ForceSpecConstr now forces specialisation even for arguments which aren't scrutinised
+Roman Leshchinskiy <rl@cse.unsw.edu.au>**20101118212839
+ Ignore-this: db45721d29a694e53746f8b76513efa4
+] 
+[Move the superclass generation to the canonicaliser
+simonpj@microsoft.com**20101118120533
+ Ignore-this: 5e0e525402a240b709f2b8104c1682b2
+ 
+ Doing superclass generation in the canonicaliser (rather than
+ TcInteract) uses less code, and is generally more efficient.
+ 
+ See Note [Adding superclasses] in TcCanonical.
+ 
+ Fixes Trac #4497.
+] 
+[Fix the generation of in-scope variables for IfaceLint check
+simonpj@microsoft.com**20101118090057
+ Ignore-this: bbcdba61ddf89d07fe69ca99c2017e3f
+] 
+[Comments only
+simonpj@microsoft.com**20101118090034
+ Ignore-this: fa2936d35a0f7be4e4535ea9e2b7bf7b
+] 
+[Omit bogus test for -XDeriveFunctor
+simonpj@microsoft.com**20101118090028
+ Ignore-this: a534243011809ebbb788b910961601c5
+ 
+ It was duplicated in the case of 'deriving( Functor )'
+ and wrong for 'deriving( Foldable )'
+] 
+[Improve error message on advice from a user
+simonpj@microsoft.com**20101118085306
+ Ignore-this: bd4f3858ff24e602e985288f27d536f3
+ 
+ See Trac #4499
+] 
+[TAG 2010-11-18
+Ian Lynagh <igloo@earth.li>**20101118011554
+ Ignore-this: ccadbe7fadd1148d2ee3caa8c8821ec5
+] 
+Patch bundle hash:
+a0bbf4353fb2c661bb9ce68d3c0f0412c3445430
