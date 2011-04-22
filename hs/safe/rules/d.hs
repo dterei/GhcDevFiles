@@ -20,6 +20,9 @@ main = do
     putStrLn $ "looking for " ++ show key
     putStrLn $ "in space " ++ show space
     putStrLn $ "Found: " ++ show (fromMaybe "Not Found!" $ lookupx space key)
+    let b | Just "c" <- lookupx space key = "YES"
+          | otherwise                     = "No"
+    putStrLn $ "Rules Disabled: " ++ b
 
 fromMaybe :: a -> Maybe a -> a
 fromMaybe a Nothing  = a
