@@ -29,3 +29,6 @@ even is very slow for word32 because it casts n to a Integer since even n = n `r
 http://hackage.haskell.org/trac/ghc/ticket/1473#comment:4
 
 build bot
+
+setting no for building some of the docs seems to be ignored (or reported ignored).
+
