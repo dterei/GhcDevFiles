@@ -10,7 +10,7 @@
 -- We only need this for Mac OS X, other targets don't use it.
 --
 
-module LlvmMangler_V5 ( llvmFixupAsm ) where
+module LlvmMangler ( llvmFixupAsm ) where
 
 import Control.Exception
 import qualified Data.ByteString.Char8 as B
@@ -23,13 +23,19 @@ infoSec, newInfoSec, newLine, spInst, jmpInst :: B.ByteString
 infoSec    = B.pack "\t.section\t__STRIP,__me"
 newInfoSec = B.pack "\n\t.text"
 newLine    = B.pack "\n"
-spInst     = B.pack ", %esp\n"
 jmpInst    = B.pack "\n\tjmp"
 
-infoLen, spFix, labelStart :: Int
-infoLen = B.length infoSec
-spFix   = 4
+infoLen, labelStart, spFix :: Int
+infoLen    = B.length infoSec
 labelStart = B.length jmpInst
+
+#if x86_64_TARGET_ARCH
+spInst     = B.pack ", %rsp\n"
+spFix      = 8
+#else
+spInst     = B.pack ", %esp\n"
+spFix      = 4
+#endif
 
 -- Search Predicates
 eolPred, dollarPred, commaPred :: Char -> Bool
@@ -120,7 +126,7 @@ fixupStack f f' =
                 B.drop labelStart c
     in if B.null c
           then f' `B.append` f
-          else if B.index targ 0 == 'L'
+          else if B.head targ == 'L'
                 then fixupStack b $ f' `B.append` a `B.append` l
                 else fixupStack b $ f' `B.append` a' `B.append` num `B.append`
                                     x `B.append` l
