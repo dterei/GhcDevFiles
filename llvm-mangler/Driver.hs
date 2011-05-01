@@ -1,8 +1,8 @@
 module Main ( main ) where
 
 import System.Environment
-import LlvmMangler
-import Criterion.Main
+import LlvmMangler_V5
+-- import Criterion.Main
 
 main :: IO ()
 main = do
