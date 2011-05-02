@@ -10,7 +10,9 @@
 -- We only need this for Mac OS X, other targets don't use it.
 --
 
-module LlvmMangler ( llvmFixupAsm ) where
+module LlvmMangler_V5 ( llvmFixupAsm ) where
+
+-- #include "HsVersions.h"
 
 import Control.Exception
 import qualified Data.ByteString.Char8 as B
@@ -29,13 +31,8 @@ infoLen, labelStart, spFix :: Int
 infoLen    = B.length infoSec
 labelStart = B.length jmpInst
 
-#if x86_64_TARGET_ARCH
 spInst     = B.pack ", %rsp\n"
 spFix      = 8
-#else
-spInst     = B.pack ", %esp\n"
-spFix      = 4
-#endif
 
 -- Search Predicates
 eolPred, dollarPred, commaPred :: Char -> Bool
