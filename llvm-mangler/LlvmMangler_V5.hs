@@ -12,6 +12,8 @@
 
 module LlvmMangler_V5 ( llvmFixupAsm ) where
 
+-- #include "HsVersions.h"
+
 import Control.Exception
 import qualified Data.ByteString.Char8 as B
 import Data.Char
@@ -23,13 +25,14 @@ infoSec, newInfoSec, newLine, spInst, jmpInst :: B.ByteString
 infoSec    = B.pack "\t.section\t__STRIP,__me"
 newInfoSec = B.pack "\n\t.text"
 newLine    = B.pack "\n"
-spInst     = B.pack ", %esp\n"
 jmpInst    = B.pack "\n\tjmp"
 
-infoLen, spFix, labelStart :: Int
-infoLen = B.length infoSec
-spFix   = 4
-labelStart = B.length jmpInst + 1
+infoLen, labelStart, spFix :: Int
+infoLen    = B.length infoSec
+labelStart = B.length jmpInst
+
+spInst     = B.pack ", %rsp\n"
+spFix      = 8
 
 -- Search Predicates
 eolPred, dollarPred, commaPred :: Char -> Bool
@@ -114,11 +117,13 @@ fixupStack f f' =
         (a', n) = B.breakEnd dollarPred a
         (n', x) = B.break commaPred n
         num     = B.pack $ show $ readInt n' + spFix
+        -- We need to avoid processing jumps to labels, they are of the form:
+        -- jmp\tL..., jmp\t_f..., jmpl\t_f..., jmpl\t*%eax..., jmpl *L...
+        targ = B.dropWhile ((==)'*') $ B.drop 1 $ B.dropWhile ((/=)'\t') $
+                B.drop labelStart c
     in if B.null c
           then f' `B.append` f
-          -- We need to avoid processing jumps to labels, they are of the form:
-          -- jmp\tL..., jmp\t_f..., jmpl\t_f..., jmpl\t*%eax...
-          else if B.index c labelStart == 'L'
+          else if B.head targ == 'L'
                 then fixupStack b $ f' `B.append` a `B.append` l
                 else fixupStack b $ f' `B.append` a' `B.append` num `B.append`
                                     x `B.append` l
