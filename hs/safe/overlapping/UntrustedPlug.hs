@@ -9,5 +9,8 @@ instance Pos a where
     res _ = False
 
 instance Pos [Int] where
-    res _ = undefined
+    res _ = True
+
+function :: Int
+function = 3
 
