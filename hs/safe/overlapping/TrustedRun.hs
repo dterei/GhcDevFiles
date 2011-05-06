@@ -2,7 +2,7 @@
 module Main where
 
 import safe TrustedLib
-import UntrustedPlug
+import safe UntrustedPlug
 
 main = do
     let r = res [(1::Int)]

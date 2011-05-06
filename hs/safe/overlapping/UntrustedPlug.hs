@@ -1,6 +1,6 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverlappingInstances #-}
-{-# LANGUAGE Safe #-}
+--{-# LANGUAGE Safe #-}
 module UntrustedPlug where
 
 import TrustedLib
