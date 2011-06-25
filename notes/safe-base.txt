@@ -1,0 +1,70 @@
+
+- GHC.Base, GHC.Prim: Leaving unsafe. Had a go at making safe versions but gets
+  GHC.Exts:           pretty ugly and complex quickly. Especially since Prim is
+							 defined internally in the compiler and Base is partially
+							 defined in a source code module but augmented by the compiler
+							 with some built in things like Bool.
+						    
+							 This is potentially another argument for symbol level safety.
+
+							 This does mean a lot of stuff is trustworthy though since
+							 they import Base
+
+- GHC.Conc: Is it safe to expose ThreadId's constructors?
+            What about asyncReadBA, asyncWriteBA functions?
+
+- GHC.Conc.IO: just made trustworthy
+               What about asyncReadBA, asyncWriteBA functions?
+
+- GHC.Event: Made trustworthy... not sure of this though
+
+- GHC.Exts: Left unsafe and didn't make safe / unsafe split
+            Mostly seems fine, only worry is access to Ptr a constructor.
+				Also re-exports GHC.Prim
+
+- GHC.Ptr: made safe/unsafe split
+           Exposes Ptr a constructor
+			  Cast operations of funptr to ptr seem dangerous as well, removed from safe version.
+
+- GHC.ForeignPtr: Made ForeignPtr type abstract
+                  Has an 'unsafeForeignPtrToPtr' function also excluded
+						The whole module seems a little dangerous. (e.g castForeignPtr ?)
+- Foreign.ForeignPtr: Split into safe unsafe, only unsafe being unsafeForeignPtrToPtr
+- Foreign.Ptr: Just made trustworthy. I've kept Ptr stuff mostly trustworthy as while very
+               dangerous (e.g cast, free...), operations that act on these pointers are in
+               the IO monad which we're allowing obviously.
+
+- GHC.IOBase: keeping unsafe and no safe version as depreciated.
+
+- GHC.IORef: Made safe version due to access to IORef constructor
+
+- GHC.IO.Handle.Types: Keeping unsafe and no safe version for now.
+
+- GHC.IO.Handle.Internals: Keeping unsafe and no safe version for now.
+
+- GHC.Pack: keeping unsafe and no safe version.
+            unpackCString# ? among others seem quite unsafe, raw pointer access right?
+
+- GHC.TopHandler: seems unsafe and didn't make safe / unsafe split.
+                  mostly fine, but for 'mkWeakThreadId', which seems a little dangerous
+
+- GHC.Weak: Can't seem to make safe version, get link errors of undefined
+            base_GHCziWeak_runFinalizzerBatch_closure whenever I try to move the
+            definition of Weak. Where else is its home defined? Have tried
+            changing rts/Prelude.h appropriately but still same error.
+
+- GHC.Word: Left unmodified and made trustworthy
+            'uncheckedShiftRL64' is worrying though
+
+- Data.Data, Data.Dynamic: Left unsafe due to whoe Typeable cast issue.
+  Data.Typeable:           I feel we could enable all of this except maybe Typeable
+                           abstract so that instances can't be defined. (Could also
+									still allow deriving of these instances). My understanding
+									is that all of this dynamic stuff works fine as long as
+									the typeOf method basically doesn't lie and pretend two
+									types are the same.
+
+- Debug.Trace was left unsafe. It can leak information to the console without detection.
+
+- System.Posix.Types: Made trustworthy. Seems fine but not 100% sure about say Fd(..)
+
