@@ -1,7 +1,7 @@
 module Main ( main ) where
 
 import System.Environment
-import LlvmMangler_V5
+import LlvmMangler_V8
 -- import Criterion.Main
 
 main :: IO ()

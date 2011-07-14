@@ -71,7 +71,7 @@ llvmFixupAsm f1 f2 = do
 -}
 fixTables :: Handle -> Handle -> I.IntMap B.ByteString -> IO ()
 fixTables r w m = do
-    f <- getFun r
+    f <- getFun r B.empty
     if B.null f
        then return ()
        else let fun    = fixupStack f B.empty
@@ -92,15 +92,13 @@ fixTables r w m = do
             in mapM_ (B.hPut w) bs >> fixTables r w m'
 
 -- | Read in the next function/data defenition
-getFun :: Handle -> IO B.ByteString
-getFun r = go [] >>= (\x -> return (B.intercalate newLine x))
-    where
-        go ls = do
-            l <- (try (B.hGetLine r))::IO (Either IOError B.ByteString)
-            case l of
-                Right l' | B.null l' -> return (B.empty : reverse ls)
-                         | otherwise -> go (l' : ls)
-                Left _ -> return []
+getFun :: Handle -> B.ByteString -> IO B.ByteString
+getFun r f = do
+    l <- (try (B.hGetLine r))::IO (Either IOError B.ByteString)
+    case l of
+        Right l' | B.null l' -> return f
+                 | otherwise -> getFun r (f `B.append` newLine `B.append` l')
+        Left _ -> return B.empty
 
 {-|
     Mac OS X requires that the stack be 16 byte aligned when making a function
