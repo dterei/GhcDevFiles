@@ -1,0 +1,17 @@
+GC Entries
+----------
+
+ * stg_gc_gen: all regs, R10 = return address, R9 = liveness mask
+ * stg_gc_ut: all regs, Sp[] = return address, R9 = liveness mask
+ * stg_gc_gen_hp: all regs, Sp[] = return address, R9 = liveness mask
+
+ * __stg_gc_fun: inspects info table to do the register saving
+
+ * __stg_gc_enter_1: [R1]
+ * stg_gc_noregs: []
+ * stg_gc_unpt_r1: [R1]
+ * stg_gc_unbx_r1: [R1]
+ * stg_gc_f1: [F1]
+ * stg_gc_d1: [D1]
+ * stg_gc_l1: [L1]
+
