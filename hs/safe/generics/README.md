@@ -7,10 +7,28 @@ GHC.Generics.
 
 ## Result
 
-Unsafe.
+Safe. But worrying. Since the Pos is deriving Generic, it is
+essentially exporting it's constructors. This is similar to it having
+a Read and Show instance and accusing this of being a flaw.
 
-Can use generics to instantiate values of any design. Basically,
-Generics functions as a standard proxy for a data type, so contruct
-the value you want through GHC.Generics and then use `GHC.Generics.to`
-to instantiate the value.
+Also since you can only `derive Generic` when you have access to all
+constructors this isn't an attack avenue.
+
+However, it may make sense to restrict GHC.Generics anyway (similar to
+Typeable) as the benefits outway the cost. How often is some of the
+more unsafe functions in that module needed? If rarely then the
+benefit from knowing Generics are compiler derived in Safe code is
+large and outways the costs.
+
+
+## Alternatives?
+
+* Make GHC.Generics unsafe and have a GHC.Generics.Safe that exposes
+  the needed tools for Generic deriving.
+
+* Add a value or type to deriving that encodes if it was by hand or
+  compiler?
+
+* Hand rolled instances of Generic aren't allowed in Safe modules
+  (i.e., same rule as Typeable).
 
