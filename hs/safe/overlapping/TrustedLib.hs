@@ -1,6 +1,6 @@
+{-# LANGUAGE Safe #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE Trustworthy #-}
-module TrustedLib where
+module TrustedLib (Pos(..)) where
 
 class Pos a where
     res :: a -> Bool
